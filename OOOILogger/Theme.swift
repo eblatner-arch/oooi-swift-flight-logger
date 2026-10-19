@@ -118,6 +118,9 @@ struct BtnStyle: ButtonStyle {
     var hpad: CGFloat = 14
     var block = true
     @Environment(\.isEnabled) private var enabled
+    init(kind: BtnKind = .normal, size: CGFloat = 16, vpad: CGFloat = 12, hpad: CGFloat = 14, block: Bool = true) {
+        self.kind = kind; self.size = size; self.vpad = vpad; self.hpad = hpad; self.block = block
+    }
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(F.display(size, 600)).tracking(size * 0.04).textCase(.uppercase)
@@ -152,7 +155,7 @@ struct Seg: View {
     var onPick: (String) -> Void
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(Array(options.enumerated()), id: \.1.id) { i, o in
+            ForEach(Array(options.enumerated()), id: \.element.id) { i, o in
                 if i > 0 { Rectangle().fill(T.line).frame(width: 1) }
                 Button { onPick(o.v) } label: {
                     VStack(spacing: 2) {

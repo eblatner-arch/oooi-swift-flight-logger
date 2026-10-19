@@ -12,7 +12,7 @@ struct OOOILoggerApp: App {
                 .task {
                     // Launch arguments used by the screenshot workflow (-openTab stats, -demoEdit 1, …)
                     let ud = UserDefaults.standard
-                    if let t = ud.string(forKey: "openTab"), let tab = Tab(rawValue: t) { model.show(tab) }
+                    if let t = ud.string(forKey: "openTab"), let tab = AppTab(rawValue: t) { model.show(tab) }
                     if ud.string(forKey: "openStats") == "search" { model.statsView = "search" }
                     await model.refresh()
                     if ud.bool(forKey: "demoEdit"), let f = model.flights.sorted(by: { $0.sortKey > $1.sortKey }).first { model.editFlight(f.id) }
@@ -21,7 +21,7 @@ struct OOOILoggerApp: App {
                     // Refresh every minute while the app is open.
                     while !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 60_000_000_000)
-                        if phase == .active { await model.refresh() }
+                        if UIApplication.shared.applicationState == .active { await model.refresh() }
                     }
                 }
                 .onChange(of: phase) { _, p in if p == .active { Task { await model.refresh() } } }
@@ -98,7 +98,7 @@ struct TabBarView: View {
     @EnvironmentObject var m: AppModel
     var body: some View {
         HStack(spacing: 3) {
-            ForEach(Tab.allCases, id: \.self) { t in
+            ForEach(AppTab.allCases, id: \.self) { t in
                 let on = m.tab == t
                 Button { m.show(t) } label: {
                     Text(t.title).font(F.display(14, 600)).tracking(0.28).textCase(.uppercase)

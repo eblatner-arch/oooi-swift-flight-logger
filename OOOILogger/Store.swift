@@ -11,7 +11,7 @@ struct OutOp: Codable, Identifiable, Equatable {
 
 enum Conn: Equatable { case notSetUp, connecting, ok, offline, needsLogin }
 
-enum Tab: String, CaseIterable { case log, list, stats, map, set
+enum AppTab: String, CaseIterable { case log, list, stats, map, set
     var title: String { ["log": "Log", "list": "Flights", "stats": "Stats", "map": "Map", "set": "Settings"][rawValue]! }
 }
 
@@ -46,7 +46,7 @@ enum Focus: Hashable { case date, flightNumber, tail, from, to, crew, out, off, 
 @MainActor
 final class AppModel: ObservableObject {
     // Navigation
-    @Published var tab: Tab = .log
+    @Published var tab: AppTab = .log
     @Published var night = false
     @Published var scrollToken = 0
     @Published var scrollBottomToken = 0
@@ -62,7 +62,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var csvCols = CSV_COLS
     @Published private(set) var csvSources = CSV_SOURCES
     @Published private(set) var loaded = false
-    @Published private(set) var hist: [Entry] = []
+    @Published private(set) var hist: [LogEntry] = []
     @Published private(set) var histKey: String?
     @Published private(set) var unknownN = 0
     @Published private(set) var conn: Conn = .connecting
@@ -379,7 +379,7 @@ final class AppModel: ObservableObject {
         return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
     }
 
-    func show(_ t: Tab) {
+    func show(_ t: AppTab) {
         tab = t; night = false; scrollToken += 1
     }
     func openNight() { night = true; scrollToken += 1 }
@@ -452,7 +452,7 @@ final class AppModel: ObservableObject {
     func saveCsv() async {
         let name = "MyFlightbook Import \(todayIso()).csv"
         var data: Data?
-        if outbox.isEmpty, let (d, http) = try? await api.raw("GET", "api/csv/pending"), http.statusCode == 200 { data = d }
+        if outbox.isEmpty, let res = try? await api.raw("GET", "api/csv/pending"), res.1.statusCode == 200 { data = res.0 }
         if data == nil { data = Data(buildCsv(flights.filter { !$0.imported }, cfg).utf8) }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         do { try data!.write(to: url, options: .atomic); shareFile = ShareItem(url: url) }
@@ -548,8 +548,9 @@ final class AppModel: ObservableObject {
         let cached = Self.file("airports.js")
         let have = UserDefaults.standard.string(forKey: "airportsUpdated")
         if airports.source == "updated", let upd = airports.updated, have != upd {
-            guard let (data, http) = try? await api.raw("GET", "js/airports.js", timeout: 60), http.statusCode == 200,
-                  let s = String(data: data, encoding: .utf8) else { return }
+            guard let res = try? await api.raw("GET", "js/airports.js", timeout: 60), res.1.statusCode == 200,
+                  let s = String(data: res.0, encoding: .utf8) else { return }
+            let data = res.0
             let ok = await Task.detached { Airports.shared.load(js: s) }.value
             if ok {
                 try? data.write(to: cached, options: .atomic)
@@ -570,29 +571,30 @@ final class AppModel: ObservableObject {
         return "\(h.importedAt)|\(airports.updated ?? "")|\(airports.count)"
     }
 
-    private func useHistory(_ key: String, _ entries: [Entry], _ unknown: Int) {
+    private func useHistory(_ key: String, _ entries: [LogEntry], _ unknown: Int) {
         hist = entries; histKey = key; unknownN = unknown
     }
 
-    private static func parseHistory(_ data: Data) -> ([Entry], Int)? {
+    nonisolated private static func parseHistory(_ data: Data) -> ([LogEntry], Int)? {
         guard let j = (try? JSONSerialization.jsonObject(with: data)) as? JSON else { return nil }
-        return (jarr(j["entries"]).map { Entry(json: jdict($0)) }, Int(jnum(j["unknown_airport_count"])))
+        return (jarr(j["entries"]).map { LogEntry(json: jdict($0)) }, Int(jnum(j["unknown_airport_count"])))
     }
 
     private func loadCachedHistory() async {
         guard let key = histCacheKey, histKey != key,
               UserDefaults.standard.string(forKey: "historyKey") == key,
               let data = try? Data(contentsOf: Self.file("history.json")) else { return }
-        if let (e, u) = await Task.detached(operation: { Self.parseHistory(data) }).value { useHistory(key, e, u) }
+        if let res = await Task.detached(operation: { AppModel.parseHistory(data) }).value { useHistory(key, res.0, res.1) }
     }
 
     func loadHistory() async {
         guard let key = histCacheKey else { hist = []; histKey = nil; unknownN = 0; return }
         if histKey == key { return }
         if UserDefaults.standard.string(forKey: "historyKey") == key { await loadCachedHistory(); if histKey == key { return } }
-        guard let (data, http) = try? await api.raw("GET", "api/history", timeout: 90), http.statusCode == 200 else { return }
-        if let (e, u) = await Task.detached(operation: { Self.parseHistory(data) }).value {
-            useHistory(key, e, u)
+        guard let res = try? await api.raw("GET", "api/history", timeout: 90), res.1.statusCode == 200 else { return }
+        let data = res.0
+        if let parsed = await Task.detached(operation: { AppModel.parseHistory(data) }).value {
+            useHistory(key, parsed.0, parsed.1)
             try? data.write(to: Self.file("history.json"), options: .atomic)
             UserDefaults.standard.set(key, forKey: "historyKey")
         }
@@ -615,7 +617,7 @@ final class AppModel: ObservableObject {
 
     // MARK: - Logbook
 
-    var entries: [Entry] { allEntries(hist: hist, app: appEntries(flights, cfg)) }
+    var entries: [LogEntry] { allEntries(hist: hist, app: appEntries(flights, cfg)) }
 
     /// The Stats period as search filters, so a tap on a top route searches the same period.
     func periodFilter() -> [String: String] {

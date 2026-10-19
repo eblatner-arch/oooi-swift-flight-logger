@@ -30,7 +30,7 @@ struct StatsView: View {
 
 struct Overview: View {
     @EnvironmentObject var m: AppModel
-    let all: [Entry]
+    let all: [LogEntry]
     @State private var tip: String?
     @State private var tipKey: String?
     @State private var tableOpen = false
@@ -98,7 +98,7 @@ struct Overview: View {
         } else { StatTile(value: v, label: l) }
     }
 
-    @ViewBuilder private func topCards(_ es: [Entry], _ fmt: String) -> some View {
+    @ViewBuilder private func topCards(_ es: [LogEntry], _ fmt: String) -> some View {
         let (pairs, aps, types) = Self.tops(es)
         let pf = m.periodFilter()
         Card {
@@ -125,7 +125,7 @@ struct Overview: View {
     }
 
     struct Pair { var n = 0; var h = 0.0; var fwd = 0 }
-    static func tops(_ es: [Entry]) -> ([(String, Pair)], [(String, Int)], [(String, Double)]) {
+    static func tops(_ es: [LogEntry]) -> ([(String, Pair)], [(String, Int)], [(String, Double)]) {
         var pairs: [String: Pair] = [:], aps: [String: Int] = [:], types: [String: Double] = [:]
         var pOrder: [String] = [], aOrder: [String] = [], tOrder: [String] = []
         for e in es where !e.sim {
@@ -149,7 +149,7 @@ struct Overview: View {
 
 struct CurrencyBox: View {
     @EnvironmentObject var m: AppModel
-    let all: [Entry]
+    let all: [LogEntry]
     var body: some View {
         let c = currencyStatus(all)
         VStack(alignment: .leading, spacing: 10) {
@@ -212,7 +212,7 @@ struct TopList: View {
 }
 
 struct Records: View {
-    let es: [Entry]
+    let es: [LogEntry]
     let fmt: String
     var body: some View {
         let flights = es.filter { !$0.sim && $0.t > 0 }
@@ -223,7 +223,7 @@ struct Records: View {
             var months: [(String, Double)] = []
             for e in flights { let k = String(e.d.prefix(7)); if let i = months.firstIndex(where: { $0.0 == k }) { months[i].1 += e.t } else { months.append((k, e.t)) } }
             let best = months.reduce(months[0]) { $1.1 > $0.1 ? $1 : $0 }
-            let rt: (Entry) -> String = { $0.r.joined(separator: "–") }
+            let rt: (LogEntry) -> String = { $0.r.joined(separator: "–") }
             rows.append(("Longest flight", "\(fmtHu(longest.t, fmt)) · \(rt(longest)) · \(fmtDate(longest.d))"))
             if far.1 > 0 { rows.append(("Farthest leg", "\(fmtNum(far.1)) nm · \(rt(far.0)) · \(fmtDate(far.0.d))")) }
             rows.append(("Busiest month", "\(fmtHu(best.1, fmt)) · \(fmtDate(best.0 + "-15", .monthYear))"))
@@ -332,7 +332,7 @@ struct BarTable: View {
 
 struct SearchView: View {
     @EnvironmentObject var m: AppModel
-    let all: [Entry]
+    let all: [LogEntry]
     @State private var since = false
 
     var body: some View {
@@ -365,7 +365,7 @@ struct SearchView: View {
 
     private var filters: some View {
         let n = m.find.nFilters
-        let uniq: ((Entry) -> String) -> [String] = { fn in Array(Set(all.map(fn).filter { !$0.isEmpty })).sorted() }
+        let uniq: ((LogEntry) -> String) -> [String] = { fn in Array(Set(all.map(fn).filter { !$0.isEmpty })).sorted() }
         return Disclosure(open: $m.findMoreOpen, arrow: "▾", summaryPadding: EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16)) {
             Text("More filters" + (n > 0 ? " · \(n)" : "")).font(F.display(14, 600)).tracking(0.84).textCase(.uppercase).foregroundStyle(T.muted)
         } content: {
@@ -418,7 +418,7 @@ struct SearchView: View {
         }
     }
 
-    private func summary(_ res: [Entry], _ fmt: String) -> some View {
+    private func summary(_ res: [LogEntry], _ fmt: String) -> some View {
         var t = 0.0, n = 0.0, l = 0, nm = 0.0
         for e in res { t += e.t; n += e.n; l += e.l; nm += entryNm(e) }
         return (Text(fmtNum(res.count)).font(F.mono(18, 600)).foregroundColor(T.ink)
@@ -426,7 +426,7 @@ struct SearchView: View {
             .padding(.horizontal, 2)
     }
 
-    @ViewBuilder private func results(_ res: [Entry], _ fmt: String) -> some View {
+    @ViewBuilder private func results(_ res: [LogEntry], _ fmt: String) -> some View {
         if res.isEmpty {
             Card { Text("No flights match.").font(F.body(16)).foregroundStyle(T.muted).frame(maxWidth: .infinity).padding(.vertical, 28) }
         } else {
@@ -445,8 +445,8 @@ struct SearchView: View {
         }
     }
 
-    private func monthGroups(_ es: [Entry]) -> [(String, [Entry])] {
-        var out: [(String, [Entry])] = []; var key = ""
+    private func monthGroups(_ es: [LogEntry]) -> [(String, [LogEntry])] {
+        var out: [(String, [LogEntry])] = []; var key = ""
         for e in es {
             let k = String(e.d.prefix(7))
             if k != key { key = k; out.append((fmtDate(k + "-15", .monthYear), [e])) } else { out[out.count - 1].1.append(e) }
@@ -457,7 +457,7 @@ struct SearchView: View {
 
 struct FindRow: View {
     @EnvironmentObject var m: AppModel
-    let e: Entry
+    let e: LogEntry
     let fmt: String
     var body: some View {
         let meta = [fmtDate(e.d, .weekdayDay), e.fn.isEmpty ? "" : fltNo(e.fn), e.reg, e.m].filter { !$0.isEmpty }.joined(separator: " · ")

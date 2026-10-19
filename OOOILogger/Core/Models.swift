@@ -173,7 +173,7 @@ struct HistoryInfo: Equatable {
 }
 
 /// One row for Stats, Map and Search: imported MyFlightbook history, or a flight logged here.
-struct Entry: Identifiable {
+struct LogEntry: Identifiable {
     var d: String
     var r: [String]
     var t: Double

@@ -63,13 +63,13 @@ func plural(_ n: Int, _ one: String, _ many: String? = nil) -> String { n == 1 ?
 
 // MARK: - Entries
 
-func appEntries(_ flights: [Flight], _ cfg: Cfg) -> [Entry] {
-    var out: [Entry] = []
+func appEntries(_ flights: [Flight], _ cfg: Cfg) -> [LogEntry] {
+    var out: [LogEntry] = []
     for f in flights {
         guard let vals = csvValues(f, cfg) else { continue }
         let get: (String) -> String = { k in f.override[k] ?? vals[k] ?? "" }
         let n: (String) -> Double = { Double(get($0)) ?? 0 }
-        var e = Entry(d: f.date, r: [apCode(f.from), apCode(f.to)], t: n("Total Flight Time"))
+        var e = LogEntry(d: f.date, r: [apCode(f.from), apCode(f.to)], t: n("Total Flight Time"))
         e.pic = n("PIC"); e.sic = n("SIC"); e.n = n("Night"); e.x = n("X-Country")
         e.l = Int(n("Landings")); e.ld = Int(n("FS Day Landings")); e.ln = Int(n("FS Night Landings"))
         e.to = Int(n("Takeoffs (any)")); e.ton = Int(n("Takeoffs - Night"))
@@ -81,29 +81,29 @@ func appEntries(_ flights: [Flight], _ cfg: Cfg) -> [Entry] {
 
 /// All entries, oldest first. A history row on the same date and route as a flight logged here is the
 /// same flight after it was imported into MyFlightbook, so the logged copy wins.
-func allEntries(hist: [Entry], app: [Entry]) -> [Entry] {
-    let key: (Entry) -> String = { "\($0.d)|\($0.r.first ?? "")|\($0.r.last ?? "")" }
+func allEntries(hist: [LogEntry], app: [LogEntry]) -> [LogEntry] {
+    let key: (LogEntry) -> String = { "\($0.d)|\($0.r.first ?? "")|\($0.r.last ?? "")" }
     let seen = Set(app.map(key))
-    let h = hist.filter { !(!$0.r.isEmpty && seen.contains(key($0))) }.map { e -> Entry in var x = e; x.src = "mfb"; return x }
+    let h = hist.filter { !(!$0.r.isEmpty && seen.contains(key($0))) }.map { e -> LogEntry in var x = e; x.src = "mfb"; return x }
     return (h + app).enumerated().sorted { a, b in a.element.d != b.element.d ? a.element.d < b.element.d : a.offset < b.offset }.map(\.element)
 }
 
-func periodOptions(_ entries: [Entry]) -> [(String, String)] {
+func periodOptions(_ entries: [LogEntry]) -> [(String, String)] {
     let years = Set(entries.map { String($0.d.prefix(4)) }).sorted(by: >)
     return [("all", "All time"), ("12m", "Last 12 months"), ("90d", "Last 90 days")] + years.map { ($0, $0) }
 }
-func inPeriod(_ entries: [Entry], _ p: String) -> [Entry] {
+func inPeriod(_ entries: [LogEntry], _ p: String) -> [LogEntry] {
     if p == "all" { return entries }
     if p == "12m" || p == "90d" { let from = addDays(todayIso(), p == "12m" ? -365 : -90); return entries.filter { $0.d > from } }
     return entries.filter { $0.d.hasPrefix(p) }
 }
 
-func legs(_ e: Entry) -> [(String, String)] {
+func legs(_ e: LogEntry) -> [(String, String)] {
     var out: [(String, String)] = []
     if e.r.count > 1 { for i in 1..<e.r.count where e.r[i] != e.r[i - 1] { out.append((e.r[i - 1], e.r[i])) } }
     return out
 }
-func entryNm(_ e: Entry) -> Double {
+func entryNm(_ e: LogEntry) -> Double {
     legs(e).reduce(0) { s, l in
         if let a = AP[l.0], let b = AP[l.1] { return s + distNm(a.p, b.p) }
         return s
@@ -113,7 +113,7 @@ func entryNm(_ e: Entry) -> Double {
 // MARK: - Currency (14 CFR 61.57)
 
 struct Recency { var until: String?; var current: Bool; var in90: Int }
-func recency(_ entries: [Entry], _ count: (Entry) -> Int) -> Recency {
+func recency(_ entries: [LogEntry], _ count: (LogEntry) -> Int) -> Recency {
     let today = todayIso(), from = addDays(today, -90)
     var n = 0, third: String?, in90 = 0
     for e in entries.reversed() {
@@ -126,9 +126,9 @@ func recency(_ entries: [Entry], _ count: (Entry) -> Int) -> Recency {
 }
 struct CurrencyKind { var to: Recency; var ldg: Recency; var until: String?; var current: Bool }
 struct Currency { var day: CurrencyKind; var night: CurrencyKind; var noTo: Bool }
-func currencyStatus(_ entries: [Entry]) -> Currency {
+func currencyStatus(_ entries: [LogEntry]) -> Currency {
     let noTo = entries.contains { $0.to == nil && $0.l != 0 }
-    let to: (Entry) -> Int = { $0.to ?? $0.l }, ton: (Entry) -> Int = { $0.ton ?? $0.ln }
+    let to: (LogEntry) -> Int = { $0.to ?? $0.l }, ton: (LogEntry) -> Int = { $0.ton ?? $0.ln }
     func merge(_ a: Recency, _ b: Recency) -> CurrencyKind {
         let until: String? = (a.until != nil && b.until != nil) ? min(a.until!, b.until!) : nil
         return CurrencyKind(to: a, ldg: b, until: until, current: a.current && b.current)
@@ -140,7 +140,7 @@ func currencyStatus(_ entries: [Entry]) -> Currency {
 // MARK: - Totals and buckets
 
 struct Totals { var flights = 0, sims = 0; var total = 0.0, pic = 0.0, sic = 0.0, night = 0.0, xc = 0.0; var l = 0, ln = 0; var nm = 0.0; var airports = 0 }
-func totals(_ es: [Entry]) -> Totals {
+func totals(_ es: [LogEntry]) -> Totals {
     var t = Totals(); var aps = Set<String>()
     for e in es {
         if e.sim { t.sims += 1 } else { t.flights += 1 }
@@ -153,7 +153,7 @@ func totals(_ es: [Entry]) -> Totals {
 }
 
 struct Bucket: Identifiable { var key: String; var label: String; var full: String; var t: Totals; var id: String { key } }
-func buckets(_ es: [Entry], _ p: String) -> (byYear: Bool, rows: [Bucket]) {
+func buckets(_ es: [LogEntry], _ p: String) -> (byYear: Bool, rows: [Bucket]) {
     let byYear = p == "all"
     var keys: [String] = []
     if byYear {
@@ -170,7 +170,7 @@ func buckets(_ es: [Entry], _ p: String) -> (byYear: Bool, rows: [Bucket]) {
             keys.append(String(format: "%04d-%02d", y, m))
         }
     }
-    var groups: [String: [Entry]] = [:]
+    var groups: [String: [LogEntry]] = [:]
     for k in keys { groups[k] = [] }
     for e in es { let k = byYear ? String(e.d.prefix(4)) : String(e.d.prefix(7)); if groups[k] != nil { groups[k]!.append(e) } }
     return (byYear, keys.map { k in
@@ -200,7 +200,7 @@ func apIs(_ code: String?, _ v: String) -> Bool {
     let v = v.uppercased()
     return code.hasPrefix(v) || (v.count <= 3 && code.hasPrefix("K") && code.dropFirst().hasPrefix(v))
 }
-func eDow(_ e: Entry) -> Int {
+func eDow(_ e: LogEntry) -> Int {
     guard let d = isoToDate(e.d) else { return 0 }
     return utcCal.component(.weekday, from: d) - 1
 }
@@ -211,7 +211,7 @@ func parseHrs(_ v: String?) -> Double? {
     return s.isEmpty ? nil : Double(s)
 }
 private func isK3(_ c: String) -> Bool { c.count == 4 && c.hasPrefix("K") && c.allSatisfy { $0.isASCII && $0.isUppercase } }
-func eHay(_ e: Entry) -> String {
+func eHay(_ e: LogEntry) -> String {
     let codes = e.r.flatMap { isK3($0) ? [$0, String($0.dropFirst())] : [$0] }
     let s3: (String) -> String = { isK3($0) ? String($0.dropFirst()) : $0 }
     let lg = legs(e).flatMap { a, b in ["\(a)-\(b)", "\(a)\(b)", "\(s3(a))-\(s3(b))", "\(s3(a))\(s3(b))"] }
@@ -227,7 +227,7 @@ func eHay(_ e: Entry) -> String {
     if let d = e.duty { parts.append(d.lowercased()) }
     return parts.filter { !$0.isEmpty }.joined(separator: " ").lowercased()
 }
-func fChip(_ e: Entry, _ k: String) -> Bool {
+func fChip(_ e: LogEntry, _ k: String) -> Bool {
     switch k {
     case "night": return e.n > 0
     case "nldg": return e.ln > 0
@@ -241,7 +241,7 @@ func fChip(_ e: Entry, _ k: String) -> Bool {
     }
 }
 
-func applyFind(_ all: [Entry], _ F: FindState) -> [Entry] {
+func applyFind(_ all: [LogEntry], _ F: FindState) -> [LogEntry] {
     let g: (String) -> String = { (F.f[$0] ?? "").trimmingCharacters(in: .whitespaces) }
     let toks = F.q.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init)
     let routeParts = g("route").uppercased().replacingOccurrences(of: "[^A-Z0-9]+", with: " ", options: .regularExpression)
@@ -292,7 +292,7 @@ func applyFind(_ all: [Entry], _ F: FindState) -> [Entry] {
 // MARK: - Map
 
 struct MapData { var aps: [String: (n: Int, first: String, last: String)] = [:]; var routes: [String: Int] = [:] }
-func mapData(_ es: [Entry]) -> MapData {
+func mapData(_ es: [LogEntry]) -> MapData {
     var d = MapData()
     for e in es where !e.sim {
         for a in Set(e.r) where AP[a] != nil {

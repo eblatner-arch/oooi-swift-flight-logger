@@ -288,6 +288,7 @@ struct DateSheet: View {
     var allowClear = false
     @Environment(\.dismiss) private var dismiss
     @State private var date = Date()
+    init(iso: Binding<String>, allowClear: Bool = false) { _iso = iso; self.allowClear = allowClear }
     var body: some View {
         VStack(spacing: 12) {
             HStack {

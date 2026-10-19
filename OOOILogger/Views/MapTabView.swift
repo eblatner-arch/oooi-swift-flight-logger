@@ -28,7 +28,7 @@ struct MapTabView: View {
         }
     }
 
-    @ViewBuilder private func content(_ all: [Entry]) -> some View {
+    @ViewBuilder private func content(_ all: [LogEntry]) -> some View {
         let opts = periodOptions(all)
         let period = opts.contains { $0.0 == m.period } ? m.period : "all"
         let d = mapData(inPeriod(all, period))
@@ -131,10 +131,10 @@ struct WorldMap: View {
                         ctx.stroke(p, with: .color(T.bar.opacity(op)), style: StrokeStyle(lineWidth: w, lineCap: .round, lineJoin: .round))
                     }
                 }
-                let maxN = Double(max(1, data.aps.values.map(\.n).max() ?? 1))
+                let maxN = Double(max(1, data.aps.values.map { $0.n }.max() ?? 1))
                 let unit = v.h / 300 * s   // one "screen pixel" at a ~300px tall map
                 let ranked = data.aps.sorted { $0.value.n != $1.value.n ? $0.value.n > $1.value.n : $0.key < $1.key }
-                var labelled = Set(ranked.prefix(10).map(\.key))
+                var labelled = Set(ranked.prefix(10).map { $0.key })
                 if let sel { labelled.insert(sel) }
                 for o in WRAP {
                     for (code, x) in ranked.reversed() {
@@ -181,7 +181,7 @@ struct WorldMap: View {
         let v = view
         let (s, ox, oy) = xf(v, size)
         let unit = v.h / 300 * s
-        let maxN = Double(max(1, data.aps.values.map(\.n).max() ?? 1))
+        let maxN = Double(max(1, data.aps.values.map { $0.n }.max() ?? 1))
         var best: (String, Double)?
         for (code, x) in data.aps {
             guard let a = AP[code] else { continue }
