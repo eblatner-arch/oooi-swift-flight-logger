@@ -1,0 +1,48 @@
+# Builds an unsigned OOOI.ipa for SideStore (which signs it with your Apple ID) on every push to
+# main, and puts it on the "latest" release, so this link always has the newest build:
+# https://github.com/eblatner-arch/oooi-swift-flight-logger/releases/latest/download/OOOI.ipa
+name: IPA
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: ipa
+  cancel-in-progress: true
+jobs:
+  ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Generate the Xcode project
+        run: brew install xcodegen && xcodegen generate
+      - name: Build for iPhone (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project OOOILogger.xcodeproj -scheme OOOILogger \
+            -destination 'generic/platform=iOS' -configuration Release \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" build.log
+      - name: Package OOOI.ipa
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          mkdir -p Payload && cp -R "$APP" Payload/
+          zip -qry OOOI.ipa Payload
+          ls -la OOOI.ipa
+      - name: Publish to the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Payload/*.app/Info.plist)
+          NOTES="OOOI $VER ($(git rev-parse --short HEAD)), built $(date -u '+%Y-%m-%d %H:%M UTC'). In SideStore: My Apps, +, pick OOOI.ipa."
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --title "OOOI $VER" --notes "$NOTES"
+            git push -f origin HEAD:refs/tags/latest
+          else
+            git tag -f latest && git push -f origin refs/tags/latest
+            gh release create latest --title "OOOI $VER" --notes "$NOTES" --latest
+          fi
+          gh release upload latest OOOI.ipa --clobber

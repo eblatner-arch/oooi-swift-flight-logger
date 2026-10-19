@@ -1,0 +1,66 @@
+# Runs the app in the iPhone simulator against the real add-on server (tools/addon, a copy of the
+# add-on's server.py) filled with made-up flights (tools/seed.py), takes screenshots of every tab,
+# and pushes them to the "screens" branch. Runs on every push to main, or from the Actions tab.
+name: Screenshots
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: screens
+  cancel-in-progress: true
+jobs:
+  screens:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Generate the Xcode project
+        run: brew install xcodegen && xcodegen generate
+      - name: Pick an iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)['devices']
+          c=[x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone') and x['name'].endswith(' Pro')]
+          c=c or [x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')]
+          print(c[-1]['udid'])")
+          echo "UDID=$UDID" >> $GITHUB_ENV
+          xcrun simctl boot "$UDID"
+          xcrun simctl ui "$UDID" appearance dark
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project OOOILogger.xcodeproj -scheme OOOILogger -destination "id=$UDID" \
+            -derivedDataPath dd CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -3
+      - name: Add-on server with made-up flights
+        run: |
+          python3 tools/seed.py /tmp/oooi/data
+          mkdir -p tools/addon/www/js && cp OOOILogger/Resources/airports.js tools/addon/www/js/
+          (OOOI_DATA=/tmp/oooi/data OOOI_SHARE=/tmp/oooi/share OOOI_PORT=8099 OOOI_DIRECT_PORT=8199 python3 tools/addon/server.py > /tmp/addon.log 2>&1 &)
+          sleep 3 && curl -s localhost:8199/api/state | head -c 200
+      - name: Run and take screenshots
+        run: |
+          B=com.ericsflights.oooilogger
+          mkdir -p shots
+          xcrun simctl install "$UDID" dd/Build/Products/Debug-iphonesimulator/OOOI.app
+          xcrun simctl spawn "$UDID" defaults write $B serverURL "http://localhost:8199"
+          shot() { xcrun simctl launch "$UDID" $B "${@:2}"; sleep 12; xcrun simctl io "$UDID" screenshot "shots/$1.png"; xcrun simctl terminate "$UDID" $B; }
+          shot 1-log -openTab log
+          shot 2-log-edit -openTab log -demoEdit 1
+          shot 3-night -openTab night -demoEdit 1
+          shot 4-flights -openTab list
+          shot 5-stats -openTab stats
+          shot 6-search -openTab stats -openStats search
+          shot 7-map -openTab map
+          shot 8-settings -openTab set
+          shot 9-settings-bottom -openTab set -scrollBottom 1
+          tail -30 /tmp/addon.log > shots/addon.log || true
+      - name: Push to the screens branch
+        run: |
+          cd shots
+          git init -q && git checkout -q -b screens
+          git add -A
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "Screenshots of ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" screens

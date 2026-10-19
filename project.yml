@@ -1,0 +1,60 @@
+name: OOOILogger
+options:
+  bundleIdPrefix: com.ericsflights
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""          # pick your team in Xcode (Signing & Capabilities)
+    CODE_SIGN_STYLE: Automatic
+targets:
+  OOOILogger:
+    type: application
+    platform: iOS
+    sources:
+      - path: OOOILogger
+        excludes: ["Resources/**"]
+      - path: OOOILogger/Resources
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ericsflights.oooilogger
+        PRODUCT_NAME: OOOI
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    info:
+      path: OOOILogger/Info.plist
+      properties:
+        CFBundleDisplayName: OOOI
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSCameraUsageDescription: "Takes a photo of the ACARS-PREVIOUS OOOI page so Gemini can read the times."
+        NSPhotoLibraryUsageDescription: "Picks a photo of the ACARS-PREVIOUS OOOI page to scan."
+        NSLocalNetworkUsageDescription: "Reaches your Home Assistant add-on over Tailscale or your home network."
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        UIAppFonts:
+          - Barlow-Regular.ttf
+          - Barlow-Medium.ttf
+          - Barlow-SemiBold.ttf
+          - BarlowSemiCondensed-Medium.ttf
+          - BarlowSemiCondensed-SemiBold.ttf
+          - BarlowSemiCondensed-Bold.ttf
+          - IBMPlexMono-Medium.ttf
+          - IBMPlexMono-SemiBold.ttf
+schemes:
+  OOOILogger:
+    build:
+      targets:
+        OOOILogger: all
+    run:
+      config: Debug
