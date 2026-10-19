@@ -96,8 +96,9 @@ struct WorldMap: View {
 
     /// viewBox → pixels, like preserveAspectRatio="xMidYMid meet"
     private func xf(_ v: MapView_, _ size: CGSize) -> (s: Double, ox: Double, oy: Double) {
-        let s = min(size.width / v.w, size.height / v.h)
-        return (s, (size.width - v.w * s) / 2, (size.height - v.h * s) / 2)
+        let W = Double(size.width), H = Double(size.height)
+        let s = min(W / v.w, H / v.h)
+        return (s, (W - v.w * s) / 2, (H - v.h * s) / 2)
     }
 
     var body: some View {
@@ -188,7 +189,7 @@ struct WorldMap: View {
             let r = max(unit * (2.5 + 5 * sqrt(Double(x.n) / maxN)), unit * 11)
             for o in WRAP {
                 let c = CGPoint(x: ((a.lon + o) * v.k - v.x) * s + ox, y: (-a.lat - v.y) * s + oy)
-                let d = hypot(c.x - loc.x, c.y - loc.y)
+                let d = Double(hypot(c.x - loc.x, c.y - loc.y))
                 if d <= r && (best == nil || d < best!.1) { best = (code, d) }
             }
         }

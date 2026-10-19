@@ -61,11 +61,10 @@ struct LogView: View {
 
     private func editBanner(_ f: Flight) -> some View {
         Card {
-            HStack {
+            VStack(alignment: .leading, spacing: 10) {
                 (Text("Editing ").font(F.body(16, 600)) + Text("\(f.date) \(f.from)–\(f.to)").font(F.mono(16)))
                     .foregroundStyle(T.ink)
-                Spacer()
-                Button("New flight") { m.newFlight(keepDate: false) }.buttonStyle(BtnStyle(block: false))
+                Button("New flight") { m.newFlight(keepDate: false) }.buttonStyle(BtnStyle())
             }
         }
     }
