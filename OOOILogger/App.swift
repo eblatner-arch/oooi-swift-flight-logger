@@ -86,11 +86,34 @@ struct HeaderView: View {
             Circle().fill(dot).frame(width: 8, height: 8)
             Text(text).font(F.body(13, 500)).foregroundStyle(T.muted).lineLimit(2)
         }
-        let title = Text("OOOI Flight Logger").font(F.display(26, 700)).tracking(0.26).foregroundStyle(T.ink)
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) { title; Spacer(minLength: 0); sync }
-            VStack(alignment: .leading, spacing: 12) { title; sync }
+        let title = HStack(alignment: .center, spacing: 10) {
+            Text("OOOI Flight Logger").font(F.display(26, 700)).tracking(0.26).foregroundStyle(T.ink)
+            Spacer(minLength: 0)
+            HABadge()
         }
+        VStack(alignment: .leading, spacing: 12) { title; sync }
+    }
+}
+
+/// Green when the app is talking to the add-on on the Home Assistant box, gray when it isn't.
+/// Tap it to check again (or to set it up).
+struct HABadge: View {
+    @EnvironmentObject var m: AppModel
+    var body: some View {
+        let on = m.conn == .ok
+        Button {
+            if m.conn == .notSetUp || m.conn == .needsLogin { m.show(.set) } else { Task { await m.refresh() } }
+        } label: {
+            HStack(spacing: 6) {
+                Circle().fill(on ? T.good : T.muted.opacity(0.7)).frame(width: 10, height: 10)
+                Text("HA").font(F.display(13, 600)).tracking(0.78).foregroundStyle(on ? T.ink : T.muted)
+            }
+            .padding(.vertical, 5).padding(.horizontal, 10)
+            .background(Capsule().fill(T.surface))
+            .overlay(Capsule().stroke(T.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(on ? "Connected to Home Assistant" : "Not connected to Home Assistant")
     }
 }
 
