@@ -21,6 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import flightmath as fm
@@ -404,33 +405,78 @@ Reply with only one JSON object, for example:
 Use null for any value you cannot read with confidence. confidence is "high", "medium" or "low". If the photo is not this ACARS page, return all values null and say what you see in notes."""
 
 
+# Gemini sometimes sits on a request for 20-40 s (its own queue; the same photo usually takes about
+# a second). If no answer has come back after HEDGE_AFTER seconds, send the same request again and use
+# whichever answer arrives first: up to three requests in flight (at 0, 4 and 9 s).
+HEDGE_AFTER = (0, 4, 9)
+GEMINI_LIMIT = 90
+
+
+def _gemini_error(e, model):
+    msg = ''
+    try:
+        msg = json.loads(e.body)['error']['message']
+    except Exception:
+        pass
+    return {
+        400: 'Gemini rejected the request. Check gemini_api_key in the add-on Configuration.' if 'key' in msg.lower() else f'Gemini error: {msg}',
+        403: 'Gemini refused the key. Check it in the add-on Configuration.',
+        404: f'Gemini has no model named "{model}". Change gemini_model in the add-on Configuration.',
+        429: 'Gemini free-tier limit reached. Wait a minute and scan again.',
+    }.get(e.status, f'Gemini error ({e.status}). {msg}')
+
+
 def gemini_scan(jpeg):
     o = options()
     if not o['gemini_api_key']:
         return 400, {'error': 'Add gemini_api_key in the add-on Configuration tab to scan.'}
-    url = f"{GEMINI_BASE}/{urllib.parse.quote(o['gemini_model'])}:generateContent?key={urllib.parse.quote(o['gemini_api_key'])}"
+    model = o['gemini_model']
+    url = f"{GEMINI_BASE}/{urllib.parse.quote(model)}:generateContent?key={urllib.parse.quote(o['gemini_api_key'])}"
+    gen = {'responseMimeType': 'application/json', 'temperature': 0}
+    if 'flash' in model and (model.startswith('gemini-3') or model.startswith('gemini-4')):
+        gen['thinkingConfig'] = {'thinkingLevel': 'minimal'}   # reading a screen needs no reasoning
     body = json.dumps({
         'contents': [{'role': 'user', 'parts': [{'text': SCAN_PROMPT}, {'inline_data': {'mime_type': 'image/jpeg', 'data': base64.b64encode(jpeg).decode()}}]}],
-        'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0},
+        'generationConfig': gen,
     }).encode()
+
+    def call():
+        return http('POST', url, body, {'Content-Type': 'application/json'}, timeout=GEMINI_LIMIT)[1]
+
     t0 = time.monotonic()
+    pool = ThreadPoolExecutor(max_workers=len(HEDGE_AFTER))
+    futs, first_err, res, winner = {}, None, None, 0
     try:
-        _, res = http('POST', url, body, {'Content-Type': 'application/json'}, timeout=90)
-    except HttpError as e:
-        msg = ''
-        try:
-            msg = json.loads(e.body)['error']['message']
-        except Exception:
-            pass
-        text = {
-            400: 'Gemini rejected the request. Check gemini_api_key in the add-on Configuration.' if 'key' in msg.lower() else f'Gemini error: {msg}',
-            403: 'Gemini refused the key. Check it in the add-on Configuration.',
-            404: f'Gemini has no model named "{o["gemini_model"]}". Change gemini_model in the add-on Configuration.',
-            429: 'Gemini free-tier limit reached. Wait a minute and scan again.',
-        }.get(e.status, f'Gemini error ({e.status}). {msg}')
-        return 502, {'error': text}
-    except Exception as e:
-        return 502, {'error': f'Could not reach Gemini: {e}'}
+        while res is None:
+            el = time.monotonic() - t0
+            while len(futs) < len(HEDGE_AFTER) and el >= HEDGE_AFTER[len(futs)]:
+                futs[pool.submit(call)] = len(futs) + 1
+            nxt = HEDGE_AFTER[len(futs)] if len(futs) < len(HEDGE_AFTER) else GEMINI_LIMIT
+            pending = [f for f in futs if not f.done()]
+            if pending:
+                wait(pending, timeout=max(0.05, min(nxt, GEMINI_LIMIT) - el), return_when=FIRST_COMPLETED)
+            else:
+                time.sleep(0.1)
+            for f in [f for f in futs if f.done()]:
+                try:
+                    res, winner = f.result(), futs[f]
+                    break
+                except HttpError as e:
+                    if e.status in (400, 403, 404):   # a request that can never work: no point waiting for the others
+                        return 502, {'error': _gemini_error(e, model)}
+                    first_err = first_err or e
+                except Exception as e:
+                    first_err = first_err or e
+            if res is None:
+                done_all = len(futs) == len(HEDGE_AFTER) and all(f.done() for f in futs)
+                if done_all or time.monotonic() - t0 >= GEMINI_LIMIT:
+                    e = first_err
+                    if isinstance(e, HttpError):
+                        return 502, {'error': _gemini_error(e, model)}
+                    return 502, {'error': f'Could not reach Gemini: {e or "no answer in time"}'}
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    ms = round((time.monotonic() - t0) * 1000)
     j = json.loads(res)
     text = ''.join(p.get('text', '') for p in (((j.get('candidates') or [{}])[0].get('content') or {}).get('parts') or []))
     start, end = text.find('{'), text.rfind('}')
@@ -438,11 +484,15 @@ def gemini_scan(jpeg):
         return 502, {'error': 'Gemini could not read the page clearly. Retake the photo straight on with less glare.'}
     try:
         out = json.loads(text[start:end + 1])
-        if isinstance(out, dict):
-            out['gemini_ms'] = round((time.monotonic() - t0) * 1000)  # for the iPhone app's scan timer
-        return 200, out
     except Exception:
         return 502, {'error': 'Gemini could not read the page clearly. Retake the photo straight on with less glare.'}
+    if isinstance(out, dict):
+        # for the scan timer: Gemini's own time, and which of the requests answered
+        out['gemini_ms'] = ms
+        out['gemini_request'] = winner
+        out['gemini_requests'] = len(futs)
+        log.info('Scan: Gemini answered in %.1f s (request %d of %d)', ms / 1000, winner, len(futs))
+    return 200, out
 
 
 # ---------------- Airport database ----------------

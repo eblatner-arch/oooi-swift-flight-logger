@@ -405,12 +405,13 @@ final class AppModel: ObservableObject {
         // Timer for debugging: each step and the total, shown under the scan message.
         var request: Double?          // send photo → answer back, seconds
         var geminiMs: Double?         // Gemini's own time, reported by the add-on (2.5.1+)
+        var geminiReq = 1, geminiReqs = 1   // add-on 2.6.2+ resends a stalled request; which one answered
         func timing(_ ok: Bool) {
             var parts = steps
             if let request, let g = geminiMs {
                 // connection = everything in the request that wasn't Gemini: upload, Home Assistant, the answer coming back
                 parts.append(String(format: "connection %.1f s", max(0, request - g / 1000)))
-                parts.append(String(format: "Gemini %.1f s", g / 1000))
+                parts.append(String(format: "Gemini %.1f s", g / 1000) + (geminiReq > 1 ? " (answer from request \(geminiReq) of \(geminiReqs))" : ""))
             } else if let request {
                 // older add-on: can't tell Gemini apart from the connection
                 if let sp = mc.split { parts.append(String(format: "sending %.1f s", sp.upload)) }
@@ -429,6 +430,7 @@ final class AppModel: ObservableObject {
             catch { request = Date().timeIntervalSince(tr); throw error }
             request = Date().timeIntervalSince(tr)
             if d["gemini_ms"] != nil { geminiMs = jnum(d["gemini_ms"]) }
+            if d["gemini_request"] != nil { geminiReq = Int(jnum(d["gemini_request"])); geminiReqs = Int(jnum(d["gemini_requests"])) }
             timing(true)
             func clean(_ v: Any?, digits: Bool) -> String {
                 guard let v, !(v is NSNull) else { return "" }
