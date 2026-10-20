@@ -101,7 +101,7 @@ final class AppModel: ObservableObject {
         try? FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
         if let d = try? Data(contentsOf: Self.file("outbox.json")), let o = try? JSONDecoder().decode([OutOp].self, from: d) { outbox = o }
         // Draw from the copy on the phone first, then bring it up to date from Home Assistant.
-        if let d = try? Data(contentsOf: Self.file("state.json")), applyState(d) { loaded = true }
+        if let d = try? Data(contentsOf: Self.file("state.json")), applyState(d) { loaded = true; drive.syncing = false }
         if !api.configured { conn = .notSetUp }
         newFlight(keepDate: false)
         loadAirports()
@@ -188,11 +188,34 @@ final class AppModel: ObservableObject {
             try? data.write(to: Self.file("state.json"), options: .atomic)
             loaded = true
             conn = .ok
-            await syncAirports()
-            await loadHistory()
         } catch {
             if conn != .needsLogin { conn = .offline }
+            return
         }
+        refreshing = false
+        if drive.syncing { followSync() }
+        await syncAirports()
+        await loadHistory()
+    }
+
+    /// While Home Assistant reports a Drive upload in progress, check every 2 s until it's done
+    /// (at most a minute), so "Syncing to Drive…" never sticks.
+    private var followTask: Task<Void, Never>?
+    private func followSync() {
+        if followTask != nil { return }
+        followTask = Task {
+            defer { followTask = nil }
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if Task.isCancelled { return }
+                await refreshStateOnly()
+                if !drive.syncing { return }
+            }
+        }
+    }
+    private func refreshStateOnly() async {
+        guard let res = try? await api.raw("GET", "api/state"), res.1.statusCode == 200, applyState(res.0) else { return }
+        try? res.0.write(to: Self.file("state.json"), options: .atomic)
     }
 
     /// After a change the add-on uploads to Drive a couple of seconds later; check back briefly.

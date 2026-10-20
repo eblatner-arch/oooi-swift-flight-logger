@@ -339,16 +339,25 @@ def run_sync():
             run_sync()
 
 
-def do_sync():
+def do_sync(force=False):
+    """Upload the three files to Drive. Skipped when nothing has changed since the last upload,
+    unless force (Sync now)."""
     with LOCK:
         g = google_state()
     if not g.get('refresh_token'):
         return False
     o = options()
+    with LOCK:
+        fl, cfg = flights(), settings()
+    pending_csv = fm.build_csv([f for f in fl if not f.get('imported')], cfg)
+    all_csv = fm.build_csv(fl, cfg)
+    digest = hashlib.sha1((json.dumps(fl, sort_keys=True) + pending_csv + all_csv + o['drive_folder']).encode()).hexdigest()
+    if not force and g.get('folder_id') and g.get('last_hash') == digest and not g.get('last_error'):
+        log.info('Drive sync skipped: nothing changed since the last upload')
+        return True
     try:
         token = access_token()
         with LOCK:
-            fl, cfg = flights(), settings()
             g = google_state()
         folder = g.get('folder_id')
         if folder:
@@ -366,10 +375,9 @@ def do_sync():
             g.update({'folder_id': folder, 'json_id': None, 'pending_id': None, 'all_id': None})
         upsert(token, g, 'json_id', 'flights.json', 'application/json',
                json.dumps({'app': 'oooi-logger-haos', 'savedAt': now_iso(), 'flights': fl}, indent=1), folder)
-        upsert(token, g, 'pending_id', 'MyFlightbook Import – pending.csv', 'text/csv',
-               fm.build_csv([f for f in fl if not f.get('imported')], cfg), folder)
-        upsert(token, g, 'all_id', 'Flight Log – all flights.csv', 'text/csv', fm.build_csv(fl, cfg), folder)
-        g.update({'last_sync': now_iso(), 'last_error': None})
+        upsert(token, g, 'pending_id', 'MyFlightbook Import – pending.csv', 'text/csv', pending_csv, folder)
+        upsert(token, g, 'all_id', 'Flight Log – all flights.csv', 'text/csv', all_csv, folder)
+        g.update({'last_sync': now_iso(), 'last_error': None, 'last_hash': digest})
         log.info('Drive sync done (%d flights)', len(fl))
         ok = True
     except PermissionError:
@@ -389,7 +397,7 @@ def do_sync():
         ok = False
     with LOCK:
         cur = google_state()
-        for k in ('folder_id', 'json_id', 'pending_id', 'all_id', 'last_sync', 'last_error'):
+        for k in ('folder_id', 'json_id', 'pending_id', 'all_id', 'last_sync', 'last_error', 'last_hash'):
             if k in g:
                 cur[k] = g[k]
         save('google.json', cur)
@@ -1051,7 +1059,7 @@ class Handler(BaseHTTPRequestHandler):
             DEVICE['pending'] = None
             return self._json(200, {'ok': True})
         if p == '/api/drive/sync':
-            ok = do_sync()
+            ok = do_sync(force=True)
             return self._json(200 if ok else 502, {'ok': ok, 'drive': state()['drive']})
         if p == '/api/drive/disconnect':
             with LOCK:
