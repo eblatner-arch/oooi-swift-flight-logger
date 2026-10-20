@@ -413,6 +413,7 @@ def gemini_scan(jpeg):
         'contents': [{'role': 'user', 'parts': [{'text': SCAN_PROMPT}, {'inline_data': {'mime_type': 'image/jpeg', 'data': base64.b64encode(jpeg).decode()}}]}],
         'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0},
     }).encode()
+    t0 = time.monotonic()
     try:
         _, res = http('POST', url, body, {'Content-Type': 'application/json'}, timeout=90)
     except HttpError as e:
@@ -436,7 +437,10 @@ def gemini_scan(jpeg):
     if start < 0 or end < start:
         return 502, {'error': 'Gemini could not read the page clearly. Retake the photo straight on with less glare.'}
     try:
-        return 200, json.loads(text[start:end + 1])
+        out = json.loads(text[start:end + 1])
+        if isinstance(out, dict):
+            out['gemini_ms'] = round((time.monotonic() - t0) * 1000)  # for the iPhone app's scan timer
+        return 200, out
     except Exception:
         return 502, {'error': 'Gemini could not read the page clearly. Retake the photo straight on with less glare.'}
 

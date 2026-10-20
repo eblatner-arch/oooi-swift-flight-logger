@@ -403,9 +403,19 @@ final class AppModel: ObservableObject {
         func lap(_ name: String, _ extra: String = "") { steps.append(String(format: "%@ %.1f s", name, Date().timeIntervalSince(t)) + extra); t = Date() }
         let mc = MetricsCatcher()
         // Timer for debugging: each step and the total, shown under the scan message.
+        var request: Double?          // send photo → answer back, seconds
+        var geminiMs: Double?         // Gemini's own time, reported by the add-on (2.5.1+)
         func timing(_ ok: Bool) {
             var parts = steps
-            if let sp = mc.split { parts.append(String(format: "upload %.1f s", sp.upload)); parts.append(String(format: "Gemini %.1f s", sp.server)) }
+            if let request, let g = geminiMs {
+                // connection = everything in the request that wasn't Gemini: upload, Home Assistant, the answer coming back
+                parts.append(String(format: "connection %.1f s", max(0, request - g / 1000)))
+                parts.append(String(format: "Gemini %.1f s", g / 1000))
+            } else if let request {
+                // older add-on: can't tell Gemini apart from the connection
+                if let sp = mc.split { parts.append(String(format: "sending %.1f s", sp.upload)) }
+                parts.append(String(format: "upload + Gemini + answer %.1f s", request))
+            }
             parts.append(String(format: "total %.1f s", Date().timeIntervalSince(t0)) + (ok ? "" : " (failed)"))
             scanTiming = method.title + ": " + parts.joined(separator: " · ")
         }
@@ -416,7 +426,12 @@ final class AppModel: ObservableObject {
             }.value
             guard let jpeg else { scanMsg = ScanMsg(kind: .bad, text: "The scan did not finish. Try again, or type the times in."); return }
             lap("Resize", " (\(px) px → \(small ? 1024 : 1600), \(ByteCountFormatter.string(fromByteCount: Int64(jpeg.count), countStyle: .file)))")
-            let d = try await api.call("POST", "api/scan", body: jpeg, contentType: "image/jpeg", timeout: 120, metrics: mc)
+            let tr = Date()
+            let d: JSON
+            do { d = try await api.call("POST", "api/scan", body: jpeg, contentType: "image/jpeg", timeout: 120, metrics: mc) }
+            catch { request = Date().timeIntervalSince(tr); throw error }
+            request = Date().timeIntervalSince(tr)
+            if d["gemini_ms"] != nil { geminiMs = jnum(d["gemini_ms"]) }
             timing(true)
             func clean(_ v: Any?, digits: Bool) -> String {
                 guard let v, !(v is NSNull) else { return "" }
