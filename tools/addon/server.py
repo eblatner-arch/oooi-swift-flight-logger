@@ -519,12 +519,25 @@ def claude_scan(jpeg):
         return 400, {'error': 'Add anthropic_api_key in the add-on Configuration tab to scan with Claude.'}
     body = json.dumps({
         'model': o['claude_model'], 'max_tokens': 400,
+        'system': 'You read airline cockpit screens from photos and reply with exactly one JSON object and nothing else: no prose, no code fences.',
         'messages': [{'role': 'user', 'content': [
             {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': base64.b64encode(jpeg).decode()}},
             {'type': 'text', 'text': SCAN_PROMPT},
         ]}],
     }).encode()
     t0 = time.monotonic()
+    for attempt in (1, 2):
+        code, out = _claude_once(o, body)
+        if code == 200 or attempt == 2 or out.get('retry') is not True:
+            break
+        log.info('Scan: Claude replied without JSON, asking again')
+    out.pop('retry', None)
+    if code == 200:
+        log.info('Scan: Claude answered in %.1f s', time.monotonic() - t0)
+    return code, out
+
+
+def _claude_once(o, body):
     try:
         _, res = http('POST', CLAUDE_URL, body, {'Content-Type': 'application/json', 'x-api-key': o['anthropic_api_key'],
                                                  'anthropic-version': '2023-06-01'}, timeout=60)
@@ -549,11 +562,11 @@ def claude_scan(jpeg):
     j = json.loads(res)
     text = ''.join(c.get('text', '') for c in (j.get('content') or []) if c.get('type') == 'text')
     try:
-        out = _read_json(text, 'Claude')
+        return 200, _read_json(text, 'Claude')
     except ValueError as e:
-        return 502, {'error': str(e)}
-    log.info('Scan: Claude answered in %.1f s', time.monotonic() - t0)
-    return 200, out
+        # Log what Claude said instead, so a misread can be looked into (Log tab of the add-on).
+        log.warning('Scan: Claude replied without JSON: %s', ' '.join(text.split())[:300])
+        return 502, {'error': str(e), 'retry': True}
 
 
 def scan_providers():
