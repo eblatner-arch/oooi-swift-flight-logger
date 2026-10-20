@@ -507,19 +507,6 @@ def gemini_scan(jpeg):
 
 
 CLAUDE_URL = os.environ.get('OOOI_CLAUDE', 'https://api.anthropic.com/v1/messages')
-_S = {'type': ['string', 'null']}
-CLAUDE_TOOL = {
-    'name': 'record_oooi',
-    'description': 'Record the values read from the ACARS-PREVIOUS OOOI page. Use null for anything you cannot read with confidence.',
-    'input_schema': {'type': 'object', 'properties': {
-        'flightNumber': {**_S, 'description': 'FLT NBR, digits only'},
-        'from': {**_S, 'description': 'DEP, 4-letter ICAO'}, 'to': {**_S, 'description': 'DES, 4-letter ICAO'},
-        'crew': {**_S, 'description': 'HHMM'}, 'out': {**_S, 'description': 'HHMM'}, 'off': {**_S, 'description': 'HHMM'},
-        'on': {**_S, 'description': 'HHMM'}, 'in': {**_S, 'description': 'HHMM'}, 'trip': {**_S, 'description': 'HH:MM'},
-        'confidence': {'type': 'string', 'enum': ['high', 'medium', 'low']},
-        'notes': {'type': 'string', 'description': 'Empty, or a few words if the photo is not this page'},
-    }, 'required': ['flightNumber', 'from', 'to', 'crew', 'out', 'off', 'on', 'in', 'trip', 'confidence', 'notes']},
-}
 
 
 def _read_json(text, who):
@@ -542,9 +529,9 @@ def claude_scan(jpeg, model=None):
         return 400, {'error': 'Add anthropic_api_key in the add-on Configuration tab to scan with Claude.'}
     body = json.dumps({
         'model': model, 'max_tokens': 1000,
-        'system': 'You read airline cockpit screens from photos. Report the values with the record_oooi tool only.',
-        # Forcing a tool call makes Claude answer with just the values (about 80 tokens), never prose.
-        'tools': [CLAUDE_TOOL], 'tool_choice': {'type': 'tool', 'name': 'record_oooi'},
+        # Plain JSON costs about half what a forced tool call does (no tool definition to send, shorter answer).
+        # If Claude ever answers in words instead, it is asked once more (see below).
+        'system': 'You read airline cockpit screens from photos and reply with exactly one compact JSON object and nothing else: no prose, no code fences.',
         'messages': [{'role': 'user', 'content': [
             {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': base64.b64encode(jpeg).decode()}},
             {'type': 'text', 'text': SCAN_PROMPT},
