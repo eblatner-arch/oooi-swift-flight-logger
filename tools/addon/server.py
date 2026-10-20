@@ -518,7 +518,7 @@ def claude_scan(jpeg):
     if not o['anthropic_api_key']:
         return 400, {'error': 'Add anthropic_api_key in the add-on Configuration tab to scan with Claude.'}
     body = json.dumps({
-        'model': o['claude_model'], 'max_tokens': 400, 'temperature': 0,
+        'model': o['claude_model'], 'max_tokens': 400,
         'messages': [{'role': 'user', 'content': [
             {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': base64.b64encode(jpeg).decode()}},
             {'type': 'text', 'text': SCAN_PROMPT},

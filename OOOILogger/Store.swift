@@ -419,7 +419,7 @@ final class AppModel: ObservableObject {
             } else if let request {
                 // older add-on: can't tell Gemini apart from the connection
                 if let sp = mc.split { parts.append(String(format: "sending %.1f s", sp.upload)) }
-                parts.append(String(format: "upload + Gemini + answer %.1f s", request))
+                parts.append(String(format: "upload + reading + answer %.1f s", request))
             }
             parts.append(String(format: "total %.1f s", Date().timeIntervalSince(t0)) + (ok ? "" : " (failed)"))
             scanTiming = method.title + ": " + parts.joined(separator: " · ")

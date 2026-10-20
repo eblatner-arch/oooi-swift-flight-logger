@@ -97,7 +97,7 @@ struct LogView: View {
                         .contentShape(Rectangle())
                 }
                 .menuOrder(.fixed)
-                Text("Take a photo of the ACARS-PREVIOUS OOOI page. Gemini reads the flight number, airports and times. Check them before saving.")
+                Text("Take a photo of the ACARS-PREVIOUS OOOI page. Claude or Gemini reads the flight number, airports and times. Check them before saving.")
                     .font(F.body(14)).foregroundStyle(T.muted).fixedSize(horizontal: false, vertical: true)
             }
             if let t = m.thumb {
