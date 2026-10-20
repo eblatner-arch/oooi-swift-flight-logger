@@ -80,6 +80,7 @@ def options():
         'anthropic_api_key': (o.get('anthropic_api_key') or '').strip(),
         'claude_model': (o.get('claude_model') or 'claude-haiku-5-5').strip(),
         'scan_provider': (o.get('scan_provider') or 'auto').strip().lower(),
+        'claude_check_model': (o.get('claude_check_model') if o.get('claude_check_model') is not None else 'claude-sonnet-5-5').strip(),
         'google_client_id': (o.get('google_client_id') or '').strip(),
         'google_client_secret': (o.get('google_client_secret') or '').strip(),
         'drive_folder': (o.get('drive_folder') or 'OOOI Logger (Home Assistant)').strip(),
@@ -533,13 +534,14 @@ def _read_json(text, who):
     raise ValueError(f'{who} could not read the page clearly. Retake the photo straight on with less glare.')
 
 
-def claude_scan(jpeg):
+def claude_scan(jpeg, model=None):
     """Same photo and instructions, sent to Claude (Anthropic API)."""
     o = options()
+    model = model or o['claude_model']
     if not o['anthropic_api_key']:
         return 400, {'error': 'Add anthropic_api_key in the add-on Configuration tab to scan with Claude.'}
     body = json.dumps({
-        'model': o['claude_model'], 'max_tokens': 1000,
+        'model': model, 'max_tokens': 1000,
         'system': 'You read airline cockpit screens from photos. Report the values with the record_oooi tool only.',
         # Forcing a tool call makes Claude answer with just the values (about 80 tokens), never prose.
         'tools': [CLAUDE_TOOL], 'tool_choice': {'type': 'tool', 'name': 'record_oooi'},
@@ -550,17 +552,17 @@ def claude_scan(jpeg):
     }).encode()
     t0 = time.monotonic()
     for attempt in (1, 2):
-        code, out = _claude_once(o, body)
+        code, out = _claude_once(o, body, model)
         if code == 200 or attempt == 2 or out.get('retry') is not True:
             break
         log.info('Scan: Claude replied without JSON, asking again')
     out.pop('retry', None)
     if code == 200:
-        log.info('Scan: Claude answered in %.1f s', time.monotonic() - t0)
+        log.info('Scan: %s answered in %.1f s', model, time.monotonic() - t0)
     return code, out
 
 
-def _claude_once(o, body):
+def _claude_once(o, body, model):
     try:
         _, res = http('POST', CLAUDE_URL, body, {'Content-Type': 'application/json', 'x-api-key': o['anthropic_api_key'],
                                                  'anthropic-version': '2023-06-01'}, timeout=60)
@@ -573,7 +575,7 @@ def _claude_once(o, body):
         text = {
             401: 'Claude refused the key. Check anthropic_api_key in the add-on Configuration.',
             403: 'Claude refused the key. Check anthropic_api_key in the add-on Configuration.',
-            404: f'Claude has no model named "{o["claude_model"]}". Change claude_model in the add-on Configuration.',
+            404: f'Claude has no model named "{model}". Check claude_model and claude_check_model in the add-on Configuration.',
             429: 'Claude rate limit reached. Wait a minute and scan again.',
             529: 'Claude is overloaded right now. Scan again.',
         }.get(e.status, f'Claude error ({e.status}). {msg}')
@@ -595,40 +597,105 @@ def _claude_once(o, body):
         return 502, {'error': str(e), 'retry': True}
 
 
-def scan_providers():
-    """Which services read the photo: scan_provider, or for auto every one that has a key."""
+def _model_name(model):
+    m = re.match(r'claude-([a-z]+)', model or '')
+    return f'Claude {m.group(1).capitalize()}' if m else (model or 'Claude')
+
+
+def scan_readers():
+    """The readers to try, in order, as (label, function). auto: Claude, then Claude's stronger model as a
+    second look, then Gemini, using every service that has a key."""
     o = options()
-    have = [p for p, k in (('claude', 'anthropic_api_key'), ('gemini', 'gemini_api_key')) if o[k]]
     want = o['scan_provider']
-    if want in ('claude', 'gemini'):
-        return [want]
-    return have or ['gemini']
+    readers = []
+    if o['anthropic_api_key'] and want in ('auto', 'claude', 'race'):
+        readers.append((_model_name(o['claude_model']), lambda j: claude_scan(j, o['claude_model'])))
+        if o['claude_check_model'] and o['claude_check_model'] != o['claude_model']:
+            readers.append((_model_name(o['claude_check_model']), lambda j: claude_scan(j, o['claude_check_model'])))
+    if o['gemini_api_key'] and want in ('auto', 'gemini', 'race'):
+        readers.append(('Gemini', gemini_scan))
+    if not readers:
+        readers.append(('Gemini', gemini_scan))   # reports the missing-key message
+    return readers
+
+
+def scan_providers():
+    """Readers in use, for Settings."""
+    o = options()
+    out = []
+    for label, _ in scan_readers():
+        if label == 'Gemini':
+            if o['gemini_api_key']:
+                out.append(f"Gemini ({o['gemini_model']})")
+        else:
+            out.append(label)
+    return out
+
+
+def _hm(v):
+    d = re.sub(r'[^0-9]', '', str(v or '').replace('Ø', '0'))
+    if len(d) not in (3, 4):
+        return None
+    d = d.zfill(4)
+    h, m = int(d[:2]), int(d[2:])
+    return h * 60 + m if h < 24 and m < 60 else None
+
+
+def check_read(r):
+    """Problems with a read, or [] when it all fits together (the same checks the app makes)."""
+    probs = []
+    t = {k: _hm(r.get(k)) for k in ('crew', 'out', 'off', 'on', 'in')}
+    missing = [k.upper() for k, v in t.items() if v is None]
+    if missing:
+        probs.append('no ' + '/'.join(missing))
+    for k in ('from', 'to'):
+        c = re.sub(r'[^A-Z0-9]', '', str(r.get(k) or '').upper().replace('Ø', '0'))
+        if len(c) != 4 or (c not in fm.AP and fm.resolve_airport(c) not in fm.AP):
+            probs.append(f'{"DEP" if k == "from" else "DES"} not an airport')
+    if not missing:
+        block = (t['in'] - t['out']) % 1440
+        air = (t['on'] - t['off']) % 1440
+        if not 0 < block <= 1200 or not 0 < air <= block:
+            probs.append('times out of order')
+        tm = re.match(r'^(\d{1,2}):?(\d{2})$', str(r.get('trip') or '').replace('Ø', '0').strip())
+        if tm and (t['in'] - t['crew']) % 1440 != int(tm.group(1)) * 60 + int(tm.group(2)):
+            probs.append("CREW→IN doesn't match TRIP")
+    return probs
 
 
 def scan_photo(jpeg):
-    """Read the photo. With more than one service, send it to all of them at once and use the first answer."""
+    """Read the photo with the first reader; if its answer doesn't check out (or it fails), ask the next one.
+    Returns the first read that checks out, else the best one found."""
     t0 = time.monotonic()
-    names = scan_providers()
-    fns = {'gemini': gemini_scan, 'claude': claude_scan}
-    pool = ThreadPoolExecutor(max_workers=len(names))
-    futs = {pool.submit(fns[n], jpeg): n for n in names}
-    errors = {}
-    try:
-        for f in as_completed(futs):
-            code, res = f.result()
-            if code == 200:
-                ms = round((time.monotonic() - t0) * 1000)
-                res['scan_provider'] = 'Claude' if futs[f] == 'claude' else 'Gemini'
-                res['scan_ms'] = ms
-                res['gemini_ms'] = ms          # older app builds read this name
-                res['scan_raced'] = len(names) > 1
-                return 200, res
-            errors[futs[f]] = res.get('error', 'Scan failed.')
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
-    if len(errors) == 1:
-        return 502, {'error': next(iter(errors.values()))}
-    return 502, {'error': ' '.join(errors[n] for n in names if n in errors)}
+    best, errors, steps = None, [], []
+    readers = scan_readers()
+    for label, fn in readers:
+        code, res = fn(jpeg)
+        if code != 200:
+            errors.append(res.get('error', 'Scan failed.'))
+            steps.append(f'{label} failed')
+            continue
+        probs = check_read(res)
+        if not probs:
+            best = (label, res)
+            break
+        steps.append(f"{label}: {', '.join(probs)}")
+        log.info('Scan: %s read did not check out (%s), asking the next reader', label, ', '.join(probs))
+        if best is None or len(probs) < len(check_read(best[1])):
+            best = (label, res)
+    if best is None:
+        return 502, {'error': ' '.join(dict.fromkeys(errors)) or 'Scan failed.'}
+    label, res = best
+    ms = round((time.monotonic() - t0) * 1000)
+    res['scan_provider'] = label + (' (second look)' if label != readers[0][0] else '')
+    res['scan_ms'] = ms
+    res['gemini_ms'] = ms          # older app builds read this name
+    res['scan_raced'] = False
+    res['scan_steps'] = steps
+    if steps and check_read(res):
+        note = 'No reader got values that check out (' + '; '.join(steps) + ').'
+        res['notes'] = (str(res.get('notes') or '') + ' ' + note).strip()
+    return 200, res
 
 
 # ---------------- Airport database ----------------
@@ -681,8 +748,7 @@ def state():
             'pending': ({'user_code': p['user_code'], 'verification_url': p['verification_url'], 'expires_at': p['expires_at'], 'error': p['error']} if p else None),
         },
         'scan': {'configured': bool(o['gemini_api_key'] or o['anthropic_api_key']), 'model': o['gemini_model'],
-                 'providers': [{'claude': f"Claude ({o['claude_model']})", 'gemini': f"Gemini ({o['gemini_model']})"}[p] for p in scan_providers()
-                               if o['anthropic_api_key' if p == 'claude' else 'gemini_api_key']]},
+                 'providers': scan_providers(), 'chain': True},
         'share_path': SHARE,
         'history': history_info(),
         'csv_columns': fm.CSV_COLS,

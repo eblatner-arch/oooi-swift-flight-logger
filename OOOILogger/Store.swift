@@ -431,6 +431,7 @@ final class AppModel: ObservableObject {
         var geminiMs: Double?         // Gemini's own time, reported by the add-on (2.5.1+)
         var geminiReq = 1, geminiReqs = 1   // add-on 2.6.2+ resends a stalled request; which one answered
         var who = "Gemini", raced = false   // add-on 2.7.0+: Claude or Gemini, and whether both were asked
+        var steps2: [String] = []           // add-on 2.8.0+: reads that didn't check out before this one
         func timing(_ ok: Bool) {
             var parts = steps
             if let request, let g = geminiMs {
@@ -438,7 +439,8 @@ final class AppModel: ObservableObject {
                 parts.append(String(format: "connection %.1f s", max(0, request - g / 1000)))
                 parts.append(String(format: "%@ %.1f s", who, g / 1000)
                              + (who == "Gemini" && geminiReq > 1 ? " (answer from request \(geminiReq) of \(geminiReqs))" : "")
-                             + (raced ? " (first of Claude and Gemini)" : ""))
+                             + (raced ? " (first of Claude and Gemini)" : "")
+                             + (steps2.isEmpty ? "" : " · " + steps2.joined(separator: "; ")))
             } else if let request {
                 // older add-on: can't tell Gemini apart from the connection
                 if let sp = mc.split { parts.append(String(format: "sending %.1f s", sp.upload)) }
@@ -459,6 +461,7 @@ final class AppModel: ObservableObject {
             if d["scan_ms"] != nil { geminiMs = jnum(d["scan_ms"]) } else if d["gemini_ms"] != nil { geminiMs = jnum(d["gemini_ms"]) }
             if let p = d["scan_provider"] as? String, !p.isEmpty { who = p }
             raced = jbool(d["scan_raced"])
+            steps2 = jarr(d["scan_steps"]).map(jstr)
             if d["gemini_request"] != nil { geminiReq = Int(jnum(d["gemini_request"])); geminiReqs = Int(jnum(d["gemini_requests"])) }
             timing(true)
             func clean(_ v: Any?, digits: Bool) -> String {

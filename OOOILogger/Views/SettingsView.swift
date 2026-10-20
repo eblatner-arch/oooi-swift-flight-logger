@@ -75,7 +75,7 @@ struct SettingsView: View {
                 }
                 Small(scanMethod.detail + " The timer under each scan shows where the time goes.")
                 Small(m.scanConfigured
-                      ? "Photos go from Home Assistant to \((m.scanProviders.isEmpty ? ["Gemini (\(m.scanModel))"] : m.scanProviders).joined(separator: " and "))\(m.scanProviders.count > 1 ? " at the same time, and the first answer is used" : ""). The keys never reach your phone. Change scan_provider, anthropic_api_key or gemini_api_key in the add-on Configuration."
+                      ? scanChainText(m.scanProviders.isEmpty ? ["Gemini (\(m.scanModel))"] : m.scanProviders)
                       : "Add gemini_api_key (Google AI Studio) or anthropic_api_key (Anthropic Console) in the add-on Configuration tab, then restart the add-on to turn on photo scanning.")
             }
             Card {
@@ -95,6 +95,12 @@ struct SettingsView: View {
             histBusy = true
             Task { _ = await m.importHistory(data, name: url.lastPathComponent); histBusy = false }
         }
+    }
+
+    private func scanChainText(_ p: [String]) -> String {
+        "Photos are read on Home Assistant by \(p[0])."
+            + (p.count > 1 ? " If a read doesn't check out (missing times, an unknown airport, or CREW→IN not matching TRIP), \(p.dropFirst().joined(separator: ", then ")) take\(p.count > 2 ? "" : "s") a second look." : "")
+            + " The keys never reach your phone. Change these in the add-on Configuration."
     }
 
     private func sync() {
