@@ -74,7 +74,6 @@ struct SettingsView: View {
                     }
                 }
                 Small(scanMethod.detail + " The timer under each scan shows where the time goes.")
-                if scanMethod == .appleAI, let why = AppleAI.unavailableReason { Small(why, color: T.warn) }
                 Small(m.scanConfigured
                       ? "Gemini is set up in the add-on Configuration (model \(m.scanModel)). Photos go from Home Assistant to Gemini; the key never reaches your phone."
                       : "Add gemini_api_key (and optionally gemini_model) in the add-on Configuration tab, then restart the add-on to turn on photo scanning.")
