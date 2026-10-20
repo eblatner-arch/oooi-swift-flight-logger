@@ -1,11 +1,13 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 
 struct LogView: View {
     @EnvironmentObject var m: AppModel
     @FocusState private var focus: Focus?
     @State private var showCamera = false
     @State private var showLibrary = false
+    @State private var showFiles = false
     @State private var libraryItem: PhotosPickerItem?
     @State private var showDate = false
 
@@ -47,6 +49,13 @@ struct LogView: View {
                 libraryItem = nil
             }
         }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image]) { res in
+            guard case .success(let url) = res else { return }
+            let ok = url.startAccessingSecurityScopedResource()
+            defer { if ok { url.stopAccessingSecurityScopedResource() } }
+            if let d = try? Data(contentsOf: url), let img = UIImage(data: d) { Task { await m.scan(img) } }
+            else { m.scanMsg = ScanMsg(kind: .bad, text: "Couldn't open that file as a photo.") }
+        }
         .sheet(isPresented: $showDate) { DateSheet(iso: $m.form.date, allowClear: false) }
     }
 
@@ -72,14 +81,22 @@ struct LogView: View {
     private var scanCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
-                Button {
-                    if UIImagePickerController.isSourceTypeAvailable(.camera) { showCamera = true } else { showLibrary = true }
-                } label: { Text("Scan OOOI page") }
-                .buttonStyle(BtnStyle(kind: .primary, size: 19, vpad: 18, hpad: 18))
-                .contextMenu {
-                    Button { showCamera = true } label: { Label("Take Photo", systemImage: "camera") }
+                // Same choice as the web app's photo box: Photo Library, Take Photo, or Choose File.
+                Menu {
                     Button { showLibrary = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        Button { showCamera = true } label: { Label("Take Photo", systemImage: "camera") }
+                    }
+                    Button { showFiles = true } label: { Label("Choose File", systemImage: "folder") }
+                } label: {
+                    Text("Scan OOOI page")
+                        .font(F.display(19, 600)).tracking(0.76).textCase(.uppercase)
+                        .foregroundStyle(T.accentInk)
+                        .padding(18).frame(maxWidth: .infinity)
+                        .background(T.accent).clipShape(RoundedRectangle(cornerRadius: 9))
+                        .contentShape(Rectangle())
                 }
+                .menuOrder(.fixed)
                 Text("Take a photo of the ACARS-PREVIOUS OOOI page. Gemini reads the flight number, airports and times. Check them before saving.")
                     .font(F.body(14)).foregroundStyle(T.muted).fixedSize(horizontal: false, vertical: true)
             }

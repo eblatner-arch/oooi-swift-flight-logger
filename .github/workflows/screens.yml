@@ -47,6 +47,7 @@ jobs:
           xcrun simctl install "$UDID" dd/Build/Products/Debug-iphonesimulator/OOOI.app
           xcrun simctl spawn "$UDID" defaults write $B serverURL "http://localhost:8199"
           shot() { xcrun simctl launch "$UDID" $B "${@:2}"; sleep 12; xcrun simctl io "$UDID" screenshot "shots/$1.png"; xcrun simctl terminate "$UDID" $B; }
+          shot 0-warmup -openTab log
           shot 1-log -openTab log
           shot 2-log-edit -openTab log -demoEdit 1
           shot 3-night -openTab night -demoEdit 1
