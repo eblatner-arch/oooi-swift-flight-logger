@@ -57,6 +57,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var drive = DriveInfo()
     @Published private(set) var scanConfigured = false
     @Published private(set) var scanModel = ""
+    @Published private(set) var scanProviders: [String] = []
     @Published private(set) var airports = AirportsInfo()
     @Published private(set) var historyInfo: HistoryInfo?
     @Published private(set) var csvCols = CSV_COLS
@@ -134,7 +135,7 @@ final class AppModel: ObservableObject {
         guard let st = (try? JSONSerialization.jsonObject(with: data)) as? JSON, st["flights"] != nil else { return false }
         serverFlights = jarr(st["flights"]).map { Flight(json: jdict($0)) }
         drive = DriveInfo(json: jdict(st["drive"]))
-        let sc = jdict(st["scan"]); scanConfigured = jbool(sc["configured"]); scanModel = jstr(sc["model"])
+        let sc = jdict(st["scan"]); scanConfigured = jbool(sc["configured"]); scanModel = jstr(sc["model"]); scanProviders = jarr(sc["providers"]).map(jstr)
         let ap = jdict(st["airports"])
         airports = AirportsInfo(source: jstr(ap["source"]).isEmpty ? "bundled" : jstr(ap["source"]), updated: ap["updated"] as? String, count: Int(jnum(ap["count"])))
         historyInfo = HistoryInfo(json: st["history"])
@@ -391,7 +392,7 @@ final class AppModel: ObservableObject {
         thumb = image
         let method = ScanMethod.current
         if loaded && !scanConfigured {
-            scanMsg = ScanMsg(kind: .warn, text: "Add gemini_api_key in the add-on Configuration tab to scan. You can type the times in below.")
+            scanMsg = ScanMsg(kind: .warn, text: "Add gemini_api_key or anthropic_api_key in the add-on Configuration tab to scan. You can type the times in below.")
             return
         }
         scanMsg = ScanMsg(kind: .plain, text: "Reading the ACARS page…")
@@ -406,12 +407,15 @@ final class AppModel: ObservableObject {
         var request: Double?          // send photo → answer back, seconds
         var geminiMs: Double?         // Gemini's own time, reported by the add-on (2.5.1+)
         var geminiReq = 1, geminiReqs = 1   // add-on 2.6.2+ resends a stalled request; which one answered
+        var who = "Gemini", raced = false   // add-on 2.7.0+: Claude or Gemini, and whether both were asked
         func timing(_ ok: Bool) {
             var parts = steps
             if let request, let g = geminiMs {
                 // connection = everything in the request that wasn't Gemini: upload, Home Assistant, the answer coming back
                 parts.append(String(format: "connection %.1f s", max(0, request - g / 1000)))
-                parts.append(String(format: "Gemini %.1f s", g / 1000) + (geminiReq > 1 ? " (answer from request \(geminiReq) of \(geminiReqs))" : ""))
+                parts.append(String(format: "%@ %.1f s", who, g / 1000)
+                             + (who == "Gemini" && geminiReq > 1 ? " (answer from request \(geminiReq) of \(geminiReqs))" : "")
+                             + (raced ? " (first of Claude and Gemini)" : ""))
             } else if let request {
                 // older add-on: can't tell Gemini apart from the connection
                 if let sp = mc.split { parts.append(String(format: "sending %.1f s", sp.upload)) }
@@ -429,7 +433,9 @@ final class AppModel: ObservableObject {
             do { d = try await api.call("POST", "api/scan", body: jpeg, contentType: "image/jpeg", timeout: 120, metrics: mc) }
             catch { request = Date().timeIntervalSince(tr); throw error }
             request = Date().timeIntervalSince(tr)
-            if d["gemini_ms"] != nil { geminiMs = jnum(d["gemini_ms"]) }
+            if d["scan_ms"] != nil { geminiMs = jnum(d["scan_ms"]) } else if d["gemini_ms"] != nil { geminiMs = jnum(d["gemini_ms"]) }
+            if let p = d["scan_provider"] as? String, !p.isEmpty { who = p }
+            raced = jbool(d["scan_raced"])
             if d["gemini_request"] != nil { geminiReq = Int(jnum(d["gemini_request"])); geminiReqs = Int(jnum(d["gemini_requests"])) }
             timing(true)
             func clean(_ v: Any?, digits: Bool) -> String {

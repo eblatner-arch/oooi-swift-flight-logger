@@ -1,22 +1,22 @@
 import Foundation
 import UIKit
 
-/// How the photo of the ACARS-PREVIOUS OOOI page is sent to Gemini (Settings → Photo scanning → Scan method).
+/// How the photo of the ACARS-PREVIOUS OOOI page is sent for reading (Settings → Photo scanning → Photo size).
 enum ScanMethod: String, CaseIterable, Identifiable {
     case geminiTiny, geminiSmall, geminiFull
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .geminiTiny: return "Gemini · tiny photo"
-        case .geminiSmall: return "Gemini · small photo"
-        case .geminiFull: return "Gemini · full photo"
+        case .geminiTiny: return "Tiny photo"
+        case .geminiSmall: return "Small photo"
+        case .geminiFull: return "Full photo"
         }
     }
     var detail: String {
         switch self {
-        case .geminiTiny: return "800 px grayscale, lower quality (about half the small photo) to Home Assistant, then Gemini. Fastest on a very weak signal; small digits are more likely to be misread."
-        case .geminiSmall: return "1024 px grayscale photo (about a sixth of the full photo) to Home Assistant, then Gemini. Best on weak signal."
-        case .geminiFull: return "1600 px color photo to Home Assistant, then Gemini. Slower to upload on weak signal."
+        case .geminiTiny: return "800 px grayscale, lower quality (about half the small photo) to Home Assistant, then to the AI. Fastest on a very weak signal; small digits are more likely to be misread."
+        case .geminiSmall: return "1024 px grayscale photo (about a sixth of the full photo) to Home Assistant, then to the AI. Best on weak signal."
+        case .geminiFull: return "1600 px color photo to Home Assistant, then to the AI. Slower to upload on weak signal."
         }
     }
     var maxSide: CGFloat { self == .geminiTiny ? 800 : self == .geminiSmall ? 1024 : 1600 }

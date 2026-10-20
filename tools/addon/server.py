@@ -21,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import flightmath as fm
@@ -77,6 +77,9 @@ def options():
     return {
         'gemini_api_key': (o.get('gemini_api_key') or '').strip(),
         'gemini_model': (o.get('gemini_model') or 'gemini-3.5-flash-lite').strip(),
+        'anthropic_api_key': (o.get('anthropic_api_key') or '').strip(),
+        'claude_model': (o.get('claude_model') or 'claude-haiku-5-5').strip(),
+        'scan_provider': (o.get('scan_provider') or 'auto').strip().lower(),
         'google_client_id': (o.get('google_client_id') or '').strip(),
         'google_client_secret': (o.get('google_client_secret') or '').strip(),
         'drive_folder': (o.get('drive_folder') or 'OOOI Logger (Home Assistant)').strip(),
@@ -488,11 +491,105 @@ def gemini_scan(jpeg):
         return 502, {'error': 'Gemini could not read the page clearly. Retake the photo straight on with less glare.'}
     if isinstance(out, dict):
         # for the scan timer: Gemini's own time, and which of the requests answered
-        out['gemini_ms'] = ms
         out['gemini_request'] = winner
         out['gemini_requests'] = len(futs)
         log.info('Scan: Gemini answered in %.1f s (request %d of %d)', ms / 1000, winner, len(futs))
     return 200, out
+
+
+CLAUDE_URL = os.environ.get('OOOI_CLAUDE', 'https://api.anthropic.com/v1/messages')
+
+
+def _read_json(text, who):
+    start, end = text.find('{'), text.rfind('}')
+    if start >= 0 and end > start:
+        try:
+            out = json.loads(text[start:end + 1])
+            if isinstance(out, dict):
+                return out
+        except Exception:
+            pass
+    raise ValueError(f'{who} could not read the page clearly. Retake the photo straight on with less glare.')
+
+
+def claude_scan(jpeg):
+    """Same photo and instructions, sent to Claude (Anthropic API)."""
+    o = options()
+    if not o['anthropic_api_key']:
+        return 400, {'error': 'Add anthropic_api_key in the add-on Configuration tab to scan with Claude.'}
+    body = json.dumps({
+        'model': o['claude_model'], 'max_tokens': 400, 'temperature': 0,
+        'messages': [{'role': 'user', 'content': [
+            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': base64.b64encode(jpeg).decode()}},
+            {'type': 'text', 'text': SCAN_PROMPT},
+        ]}],
+    }).encode()
+    t0 = time.monotonic()
+    try:
+        _, res = http('POST', CLAUDE_URL, body, {'Content-Type': 'application/json', 'x-api-key': o['anthropic_api_key'],
+                                                 'anthropic-version': '2023-06-01'}, timeout=60)
+    except HttpError as e:
+        msg = ''
+        try:
+            msg = json.loads(e.body)['error']['message']
+        except Exception:
+            pass
+        text = {
+            401: 'Claude refused the key. Check anthropic_api_key in the add-on Configuration.',
+            403: 'Claude refused the key. Check anthropic_api_key in the add-on Configuration.',
+            404: f'Claude has no model named "{o["claude_model"]}". Change claude_model in the add-on Configuration.',
+            429: 'Claude rate limit reached. Wait a minute and scan again.',
+            529: 'Claude is overloaded right now. Scan again.',
+        }.get(e.status, f'Claude error ({e.status}). {msg}')
+        if e.status == 400 and 'credit' in msg.lower():
+            text = 'Your Anthropic account is out of credit. Add credit at console.anthropic.com.'
+        return 502, {'error': text}
+    except Exception as e:
+        return 502, {'error': f'Could not reach Claude: {e}'}
+    j = json.loads(res)
+    text = ''.join(c.get('text', '') for c in (j.get('content') or []) if c.get('type') == 'text')
+    try:
+        out = _read_json(text, 'Claude')
+    except ValueError as e:
+        return 502, {'error': str(e)}
+    log.info('Scan: Claude answered in %.1f s', time.monotonic() - t0)
+    return 200, out
+
+
+def scan_providers():
+    """Which services read the photo: scan_provider, or for auto every one that has a key."""
+    o = options()
+    have = [p for p, k in (('claude', 'anthropic_api_key'), ('gemini', 'gemini_api_key')) if o[k]]
+    want = o['scan_provider']
+    if want in ('claude', 'gemini'):
+        return [want]
+    return have or ['gemini']
+
+
+def scan_photo(jpeg):
+    """Read the photo. With more than one service, send it to all of them at once and use the first answer."""
+    t0 = time.monotonic()
+    names = scan_providers()
+    fns = {'gemini': gemini_scan, 'claude': claude_scan}
+    pool = ThreadPoolExecutor(max_workers=len(names))
+    futs = {pool.submit(fns[n], jpeg): n for n in names}
+    errors = {}
+    try:
+        for f in as_completed(futs):
+            code, res = f.result()
+            if code == 200:
+                ms = round((time.monotonic() - t0) * 1000)
+                res['scan_provider'] = 'Claude' if futs[f] == 'claude' else 'Gemini'
+                res['scan_ms'] = ms
+                res['gemini_ms'] = ms          # older app builds read this name
+                res['scan_raced'] = len(names) > 1
+                return 200, res
+            errors[futs[f]] = res.get('error', 'Scan failed.')
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    if len(errors) == 1:
+        return 502, {'error': next(iter(errors.values()))}
+    return 502, {'error': ' '.join(errors[n] for n in names if n in errors)}
 
 
 # ---------------- Airport database ----------------
@@ -544,7 +641,9 @@ def state():
             'folder': o['drive_folder'], 'syncing': SYNC['running'],
             'pending': ({'user_code': p['user_code'], 'verification_url': p['verification_url'], 'expires_at': p['expires_at'], 'error': p['error']} if p else None),
         },
-        'scan': {'configured': bool(o['gemini_api_key']), 'model': o['gemini_model']},
+        'scan': {'configured': bool(o['gemini_api_key'] or o['anthropic_api_key']), 'model': o['gemini_model'],
+                 'providers': [{'claude': f"Claude ({o['claude_model']})", 'gemini': f"Gemini ({o['gemini_model']})"}[p] for p in scan_providers()
+                               if o['anthropic_api_key' if p == 'claude' else 'gemini_api_key']]},
         'share_path': SHARE,
         'history': history_info(),
         'csv_columns': fm.CSV_COLS,
@@ -882,7 +981,7 @@ class Handler(BaseHTTPRequestHandler):
                 img = self._body()
             except ValueError:
                 return self._json(413, {'error': 'Photo is too large.'})
-            code, res = gemini_scan(img)
+            code, res = scan_photo(img)
             return self._json(code, res)
         if p == '/api/flights/mark-imported':
             n = 0
