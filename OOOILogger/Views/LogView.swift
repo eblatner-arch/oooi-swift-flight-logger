@@ -104,6 +104,7 @@ struct LogView: View {
                 Image(uiImage: t).resizable().scaledToFit().frame(maxHeight: 120).clipShape(RoundedRectangle(cornerRadius: 8))
             }
             if let msg = m.scanMsg { MsgBox(kind: msg.kind, text: msg.text) }
+            if let t = m.scanTiming { Text(t).font(F.mono(12)).foregroundStyle(T.muted).fixedSize(horizontal: false, vertical: true) }
         }
     }
 

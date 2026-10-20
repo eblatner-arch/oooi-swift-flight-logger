@@ -76,6 +76,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var editId: String?
     @Published var scannedTrip: Int?
     @Published var scanMsg: ScanMsg?
+    @Published var scanTiming: String?
     @Published var thumb: UIImage?
     @Published var focusRequest: Focus?
     @Published var showDelConfirm = false
@@ -325,14 +326,14 @@ final class AppModel: ObservableObject {
         editId = nil; scannedTrip = nil
         var f = Flight(); f.date = keepDate && !form.date.isEmpty ? form.date : todayIso(); f.duty = "PF"; f.seat = cfg.seat
         fillForm(f)
-        thumb = nil; scanMsg = nil; showDelConfirm = false
+        thumb = nil; scanMsg = nil; scanTiming = nil; showDelConfirm = false
     }
 
     func editFlight(_ id: String) {
         guard let f = flights.first(where: { $0.id == id }) else { return }
         editId = id; scannedTrip = nil
         fillForm(f)
-        thumb = nil; scanMsg = nil; showDelConfirm = false
+        thumb = nil; scanMsg = nil; scanTiming = nil; showDelConfirm = false
         show(.log)
     }
 
@@ -393,10 +394,24 @@ final class AppModel: ObservableObject {
             return
         }
         scanMsg = ScanMsg(kind: .plain, text: "Reading the ACARS page…")
+        scanTiming = nil
+        let t0 = Date()
         let jpeg = await Task.detached(priority: .userInitiated) { downscale(image, 1600).jpegData(compressionQuality: 0.88) }.value
         guard let jpeg else { scanMsg = ScanMsg(kind: .bad, text: "The scan did not finish. Try again, or type the times in."); return }
+        let t1 = Date()
+        let mc = MetricsCatcher()
+        // Timer for debugging: resize on the phone, upload to Home Assistant, Gemini (the add-on's answer), total.
+        func timing(_ ok: Bool) {
+            let total = Date().timeIntervalSince(t0), resize = t1.timeIntervalSince(t0)
+            let px = Int(max(image.size.width * image.scale, image.size.height * image.scale))
+            var parts = [String(format: "Resize %.1f s (%d px → 1600, %@)", resize, px, ByteCountFormatter.string(fromByteCount: Int64(jpeg.count), countStyle: .file))]
+            if let sp = mc.split { parts.append(String(format: "upload %.1f s", sp.upload)); parts.append(String(format: "Gemini %.1f s", sp.server)) }
+            parts.append(String(format: "total %.1f s", total) + (ok ? "" : " (failed)"))
+            scanTiming = parts.joined(separator: " · ")
+        }
         do {
-            let d = try await api.call("POST", "api/scan", body: jpeg, contentType: "image/jpeg", timeout: 120)
+            let d = try await api.call("POST", "api/scan", body: jpeg, contentType: "image/jpeg", timeout: 120, metrics: mc)
+            timing(true)
             func clean(_ v: Any?, digits: Bool) -> String {
                 guard let v, !(v is NSNull) else { return "" }
                 let s = jstr(v).replacingOccurrences(of: "Ø", with: "0").uppercased()
@@ -435,6 +450,7 @@ final class AppModel: ObservableObject {
             }
             if form.tail.isEmpty { focusRequest = .tail }
         } catch {
+            timing(false)
             scanMsg = ScanMsg(kind: .bad, text: (error as? APIError)?.message ?? "The scan did not finish. Try again, or type the times in.")
         }
     }

@@ -47,7 +47,7 @@ final class API {
     func url(_ path: String) -> URL? { base.flatMap { URL(string: path, relativeTo: $0)?.absoluteURL } }
 
     func raw(_ method: String, _ path: String, body: Data? = nil, contentType: String? = nil,
-             headers: [String: String] = [:], timeout: TimeInterval = 15) async throws -> (Data, HTTPURLResponse) {
+             headers: [String: String] = [:], timeout: TimeInterval = 15, metrics: MetricsCatcher? = nil) async throws -> (Data, HTTPURLResponse) {
         guard let u = url(path) else { throw APIError(message: "Add your Home Assistant address in Settings.", status: 0) }
         var req = URLRequest(url: u, timeoutInterval: timeout)
         req.httpMethod = method
@@ -56,7 +56,7 @@ final class API {
         if !token.isEmpty { req.setValue("oooi_auth=\(token)", forHTTPHeaderField: "Cookie") }
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         let data: Data, resp: URLResponse
-        do { (data, resp) = try await session.data(for: req) } catch { throw APIError.unreachable }
+        do { (data, resp) = try await session.data(for: req, delegate: metrics) } catch { throw APIError.unreachable }
         guard let http = resp as? HTTPURLResponse else { throw APIError.unreachable }
         return (data, http)
     }
@@ -64,10 +64,10 @@ final class API {
     /// JSON request; throws the add-on's own error text on failure.
     @discardableResult
     func call(_ method: String, _ path: String, json: Any? = nil, body: Data? = nil, contentType: String? = nil,
-              headers: [String: String] = [:], timeout: TimeInterval = 15) async throws -> JSON {
+              headers: [String: String] = [:], timeout: TimeInterval = 15, metrics: MetricsCatcher? = nil) async throws -> JSON {
         var b = body, ct = contentType
         if let json { b = try JSONSerialization.data(withJSONObject: json); ct = "application/json" }
-        let (data, http) = try await raw(method, path, body: b, contentType: ct, headers: headers, timeout: timeout)
+        let (data, http) = try await raw(method, path, body: b, contentType: ct, headers: headers, timeout: timeout, metrics: metrics)
         let j = (try? JSONSerialization.jsonObject(with: data)) as? JSON ?? [:]
         if http.statusCode == 401 { throw APIError(message: (j["error"] as? String) ?? "Log in again.", status: 401) }
         guard (200..<300).contains(http.statusCode) else {
@@ -90,5 +90,18 @@ final class API {
         } else {
             token = ""   // no app_password on the add-on
         }
+    }
+}
+
+/// Collects URLSession timing for one request (used by the scan timer).
+final class MetricsCatcher: NSObject, URLSessionTaskDelegate {
+    private(set) var transaction: URLSessionTaskTransactionMetrics?
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        transaction = metrics.transactionMetrics.last
+    }
+    /// Seconds spent sending the photo (connect + upload) and waiting for the add-on's answer (Gemini).
+    var split: (upload: Double, server: Double)? {
+        guard let t = transaction, let start = t.fetchStartDate, let sent = t.requestEndDate, let first = t.responseStartDate else { return nil }
+        return (sent.timeIntervalSince(start), first.timeIntervalSince(sent))
     }
 }
