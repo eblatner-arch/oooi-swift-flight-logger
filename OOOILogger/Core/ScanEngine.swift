@@ -1,6 +1,6 @@
 import Foundation
 import UIKit
-import Vision
+@preconcurrency import Vision
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
