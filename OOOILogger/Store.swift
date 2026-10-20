@@ -432,6 +432,7 @@ final class AppModel: ObservableObject {
         var geminiReq = 1, geminiReqs = 1   // add-on 2.6.2+ resends a stalled request; which one answered
         var who = "Gemini", raced = false   // add-on 2.7.0+: Claude or Gemini, and whether both were asked
         var steps2: [String] = []           // add-on 2.8.0+: reads that didn't check out before this one
+        var modelID = "", msgID = "", tokens = ""   // add-on 2.8.1+: Anthropic's record of the answer
         func timing(_ ok: Bool) {
             var parts = steps
             if let request, let g = geminiMs {
@@ -447,6 +448,7 @@ final class AppModel: ObservableObject {
                 parts.append(String(format: "upload + reading + answer %.1f s", request))
             }
             parts.append(String(format: "total %.1f s", Date().timeIntervalSince(t0)) + (ok ? "" : " (failed)"))
+            if !msgID.isEmpty { parts.append("\(modelID) · \(tokens) tokens · \(msgID)") }
             scanTiming = method.title + ": " + parts.joined(separator: " · ")
         }
         do {
@@ -462,6 +464,7 @@ final class AppModel: ObservableObject {
             if let p = d["scan_provider"] as? String, !p.isEmpty { who = p }
             raced = jbool(d["scan_raced"])
             steps2 = jarr(d["scan_steps"]).map(jstr)
+            modelID = jstr(d["scan_model"]); msgID = jstr(d["scan_message_id"]); tokens = jstr(d["scan_tokens"])
             if d["gemini_request"] != nil { geminiReq = Int(jnum(d["gemini_request"])); geminiReqs = Int(jnum(d["gemini_requests"])) }
             timing(true)
             func clean(_ v: Any?, digits: Bool) -> String {

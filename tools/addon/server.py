@@ -558,7 +558,7 @@ def claude_scan(jpeg, model=None):
         log.info('Scan: Claude replied without JSON, asking again')
     out.pop('retry', None)
     if code == 200:
-        log.info('Scan: %s answered in %.1f s', model, time.monotonic() - t0)
+        log.info('Scan: %s answered in %.1f s (message %s, %s tokens)', out.get('_model'), time.monotonic() - t0, out.get('_id'), out.get('_tokens'))
     return code, out
 
 
@@ -585,12 +585,16 @@ def _claude_once(o, body, model):
     except Exception as e:
         return 502, {'error': f'Could not reach Claude: {e}'}
     j = json.loads(res)
+    # Anthropic's own record of this request: the model that actually answered and its message ID
+    # (searchable in console.anthropic.com → Logs), plus the tokens billed.
+    u = j.get('usage') or {}
+    meta = {'_model': j.get('model') or model, '_id': j.get('id', ''), '_tokens': f"{u.get('input_tokens', '?')} in / {u.get('output_tokens', '?')} out"}
     for c in j.get('content') or []:
         if c.get('type') == 'tool_use' and isinstance(c.get('input'), dict):
-            return 200, c['input']
+            return 200, {**c['input'], **meta}
     text = ''.join(c.get('text', '') for c in (j.get('content') or []) if c.get('type') == 'text')
     try:
-        return 200, _read_json(text, 'Claude')
+        return 200, {**_read_json(text, 'Claude'), **meta}
     except ValueError as e:
         # Log what Claude said instead, so a misread can be looked into (Log tab of the add-on).
         log.warning('Scan: Claude replied without JSON: %s', ' '.join(text.split())[:300])
@@ -686,8 +690,13 @@ def scan_photo(jpeg):
     if best is None:
         return 502, {'error': ' '.join(dict.fromkeys(errors)) or 'Scan failed.'}
     label, res = best
+    if res.get('_model'):                       # name the model Anthropic says answered, not the setting
+        label = _model_name(res['_model'])
+    res['scan_model'] = res.pop('_model', None) or ('gemini' if label == 'Gemini' else '')
+    res['scan_message_id'] = res.pop('_id', '')
+    res['scan_tokens'] = res.pop('_tokens', '')
     ms = round((time.monotonic() - t0) * 1000)
-    res['scan_provider'] = label + (' (second look)' if label != readers[0][0] else '')
+    res['scan_provider'] = label + (' (second look)' if best[0] != readers[0][0] else '')
     res['scan_ms'] = ms
     res['gemini_ms'] = ms          # older app builds read this name
     res['scan_raced'] = False
