@@ -77,6 +77,7 @@ final class AppModel: ObservableObject {
     @Published var scannedTrip: Int?
     @Published var scanMsg: ScanMsg?
     @Published var scanTiming: String?
+    @Published var scanText: String?
     @Published var thumb: UIImage?
     @Published var focusRequest: Focus?
     @Published var showDelConfirm = false
@@ -326,14 +327,14 @@ final class AppModel: ObservableObject {
         editId = nil; scannedTrip = nil
         var f = Flight(); f.date = keepDate && !form.date.isEmpty ? form.date : todayIso(); f.duty = "PF"; f.seat = cfg.seat
         fillForm(f)
-        thumb = nil; scanMsg = nil; scanTiming = nil; showDelConfirm = false
+        thumb = nil; scanMsg = nil; scanTiming = nil; scanText = nil; showDelConfirm = false
     }
 
     func editFlight(_ id: String) {
         guard let f = flights.first(where: { $0.id == id }) else { return }
         editId = id; scannedTrip = nil
         fillForm(f)
-        thumb = nil; scanMsg = nil; scanTiming = nil; showDelConfirm = false
+        thumb = nil; scanMsg = nil; scanTiming = nil; scanText = nil; showDelConfirm = false
         show(.log)
     }
 
@@ -389,28 +390,50 @@ final class AppModel: ObservableObject {
 
     func scan(_ image: UIImage) async {
         thumb = image
-        if loaded && !scanConfigured {
+        let method = ScanMethod.current
+        let gemini = method == .geminiFull || method == .geminiSmall
+        if gemini && loaded && !scanConfigured {
             scanMsg = ScanMsg(kind: .warn, text: "Add gemini_api_key in the add-on Configuration tab to scan. You can type the times in below.")
             return
         }
-        scanMsg = ScanMsg(kind: .plain, text: "Reading the ACARS page…")
-        scanTiming = nil
+        scanMsg = ScanMsg(kind: .plain, text: gemini ? "Reading the ACARS page…" : "Reading the ACARS page on the iPhone…")
+        scanTiming = nil; scanText = nil
         let t0 = Date()
-        let jpeg = await Task.detached(priority: .userInitiated) { downscale(image, 1600).jpegData(compressionQuality: 0.88) }.value
-        guard let jpeg else { scanMsg = ScanMsg(kind: .bad, text: "The scan did not finish. Try again, or type the times in."); return }
-        let t1 = Date()
+        let px = Int(max(image.size.width * image.scale, image.size.height * image.scale))
+        var steps: [String] = []
+        var t = Date()
+        func lap(_ name: String, _ extra: String = "") { steps.append(String(format: "%@ %.1f s", name, Date().timeIntervalSince(t)) + extra); t = Date() }
         let mc = MetricsCatcher()
-        // Timer for debugging: resize on the phone, upload to Home Assistant, Gemini (the add-on's answer), total.
+        // Timer for debugging: each step and the total, shown under the scan message.
         func timing(_ ok: Bool) {
-            let total = Date().timeIntervalSince(t0), resize = t1.timeIntervalSince(t0)
-            let px = Int(max(image.size.width * image.scale, image.size.height * image.scale))
-            var parts = [String(format: "Resize %.1f s (%d px → 1600, %@)", resize, px, ByteCountFormatter.string(fromByteCount: Int64(jpeg.count), countStyle: .file))]
+            var parts = steps
             if let sp = mc.split { parts.append(String(format: "upload %.1f s", sp.upload)); parts.append(String(format: "Gemini %.1f s", sp.server)) }
-            parts.append(String(format: "total %.1f s", total) + (ok ? "" : " (failed)"))
-            scanTiming = parts.joined(separator: " · ")
+            parts.append(String(format: "total %.1f s", Date().timeIntervalSince(t0)) + (ok ? "" : " (failed)"))
+            scanTiming = method.title + ": " + parts.joined(separator: " · ")
         }
         do {
-            let d = try await api.call("POST", "api/scan", body: jpeg, contentType: "image/jpeg", timeout: 120, metrics: mc)
+            let d: JSON
+            switch method {
+            case .geminiFull, .geminiSmall:
+                let small = method == .geminiSmall
+                let jpeg = await Task.detached(priority: .userInitiated) {
+                    small ? smallGrayJPEG(image) : downscale(image, 1600).jpegData(compressionQuality: 0.88)
+                }.value
+                guard let jpeg else { scanMsg = ScanMsg(kind: .bad, text: "The scan did not finish. Try again, or type the times in."); return }
+                lap("Resize", " (\(px) px → \(small ? 1024 : 1600), \(ByteCountFormatter.string(fromByteCount: Int64(jpeg.count), countStyle: .file)))")
+                t = Date()
+                d = try await api.call("POST", "api/scan", body: jpeg, contentType: "image/jpeg", timeout: 120, metrics: mc)
+            case .onDevice, .appleAI:
+                let ocr = try await recognizeText(image)
+                lap("Read text", " (\(ocr.words.count) words)")
+                scanText = ocr.lines.joined(separator: "\n")
+                if method == .appleAI {
+                    d = try await AppleAI.read(ocr)
+                    lap("Apple Intelligence")
+                } else {
+                    d = parseOOOI(ocr)
+                }
+            }
             timing(true)
             func clean(_ v: Any?, digits: Bool) -> String {
                 guard let v, !(v is NSNull) else { return "" }

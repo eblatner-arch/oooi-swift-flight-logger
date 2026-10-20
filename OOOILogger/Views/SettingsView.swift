@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var histBusy = false
     @State private var removeArmed = false
     @State private var apBusy = false
+    @State private var scanMethod = ScanMethod.current
 
     var body: some View {
         let fmt = m.cfg.timeFmt
@@ -66,6 +67,14 @@ struct SettingsView: View {
             }
             Card {
                 LabelText("Photo scanning (Gemini)")
+                VStack(alignment: .leading, spacing: 5) {
+                    LabelText("Scan method")
+                    SelectBox(options: ScanMethod.allCases.map { ($0.rawValue, $0.title) }, value: scanMethod.rawValue, block: true) {
+                        if let v = ScanMethod(rawValue: $0) { scanMethod = v; ScanMethod.current = v }
+                    }
+                }
+                Small(scanMethod.detail + " The timer under each scan shows where the time goes.")
+                if scanMethod == .appleAI, let why = AppleAI.unavailableReason { Small(why, color: T.warn) }
                 Small(m.scanConfigured
                       ? "Gemini is set up in the add-on Configuration (model \(m.scanModel)). Photos go from Home Assistant to Gemini; the key never reaches your phone."
                       : "Add gemini_api_key (and optionally gemini_model) in the add-on Configuration tab, then restart the add-on to turn on photo scanning.")

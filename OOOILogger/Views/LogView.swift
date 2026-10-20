@@ -8,6 +8,7 @@ struct LogView: View {
     @State private var showCamera = false
     @State private var showLibrary = false
     @State private var showFiles = false
+    @State private var showText = false
     @State private var libraryItem: PhotosPickerItem?
     @State private var showDate = false
 
@@ -105,6 +106,15 @@ struct LogView: View {
             }
             if let msg = m.scanMsg { MsgBox(kind: msg.kind, text: msg.text) }
             if let t = m.scanTiming { Text(t).font(F.mono(12)).foregroundStyle(T.muted).fixedSize(horizontal: false, vertical: true) }
+            if let txt = m.scanText {
+                VStack(alignment: .leading, spacing: 6) {
+                    LinkBtn(showText ? "Hide recognized text" : "Show recognized text") { showText.toggle() }
+                    if showText {
+                        Text(txt.isEmpty ? "(no text found)" : txt).font(F.mono(12)).foregroundStyle(T.ink).textSelection(.enabled)
+                            .padding(10).frame(maxWidth: .infinity, alignment: .leading).background(T.bg).clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
         }
     }
 
