@@ -420,12 +420,9 @@ final class AppModel: ObservableObject {
             scanTiming = method.title + ": " + parts.joined(separator: " · ")
         }
         do {
-            let small = method == .geminiSmall
-            let jpeg = await Task.detached(priority: .userInitiated) {
-                small ? smallGrayJPEG(image) : downscale(image, 1600).jpegData(compressionQuality: 0.88)
-            }.value
+            let jpeg = await Task.detached(priority: .userInitiated) { method.jpeg(image) }.value
             guard let jpeg else { scanMsg = ScanMsg(kind: .bad, text: "The scan did not finish. Try again, or type the times in."); return }
-            lap("Resize", " (\(px) px → \(small ? 1024 : 1600), \(ByteCountFormatter.string(fromByteCount: Int64(jpeg.count), countStyle: .file)))")
+            lap("Resize", " (\(px) px → \(Int(method.maxSide)), \(ByteCountFormatter.string(fromByteCount: Int64(jpeg.count), countStyle: .file)))")
             let tr = Date()
             let d: JSON
             do { d = try await api.call("POST", "api/scan", body: jpeg, contentType: "image/jpeg", timeout: 120, metrics: mc) }
