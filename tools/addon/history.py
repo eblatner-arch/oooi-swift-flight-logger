@@ -59,6 +59,11 @@ def _hours(v):
         return 0.0
 
 
+def _min(h):
+    """Hours snapped to the whole minute (logbooks keep minutes; 0.01 h decimals would drift when summed)."""
+    return round(round(h * 60) / 60, 4)
+
+
 def _int(v):
     try:
         return int(float((v or '0').strip() or 0))
@@ -170,9 +175,9 @@ def parse(data):
                 break
         model = (get(row, 'icao_model') or get(row, 'model').split(',')[0]).strip()
         e = {
-            'd': d, 'r': route, 't': round(total, 2),
-            'pic': round(_hours(get(row, 'pic')), 2), 'sic': round(_hours(get(row, 'sic')), 2),
-            'n': round(_hours(get(row, 'night')), 2), 'x': round(_hours(get(row, 'xc')), 2),
+            'd': d, 'r': route, 't': _min(total),
+            'pic': _min(_hours(get(row, 'pic'))), 'sic': _min(_hours(get(row, 'sic'))),
+            'n': _min(_hours(get(row, 'night'))), 'x': _min(_hours(get(row, 'xc'))),
             'l': _int(get(row, 'landings')), 'ld': _int(get(row, 'fs_day')), 'ln': _int(get(row, 'fs_night')),
             'reg': reg[:16], 'm': model[:24], 'fn': get(row, 'flight_number').strip()[:12],
         }
@@ -193,7 +198,7 @@ def parse(data):
         'sim_sessions': sum(1 for e in entries if e.get('sim')),
         'skipped_rows': skipped,
         'first': entries[0]['d'], 'last': entries[-1]['d'],
-        'total_hours': round(sum(e['t'] for e in entries), 1),
+        'total_hours': round(sum(round(e['t'] * 60) for e in entries) / 60, 4),   # summed in whole minutes
         'columns_found': sorted(col),
         'unknown_airports': unknown,
         'unknown_airport_count': n_unknown,

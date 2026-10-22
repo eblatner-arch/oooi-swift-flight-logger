@@ -69,8 +69,8 @@ func appEntries(_ flights: [Flight], _ cfg: Cfg) -> [LogEntry] {
         guard let vals = csvValues(f, cfg) else { continue }
         let get: (String) -> String = { k in f.override[k] ?? vals[k] ?? "" }
         let n: (String) -> Double = { Double(get($0)) ?? 0 }
-        var e = LogEntry(d: f.date, r: [apCode(f.from), apCode(f.to)], t: n("Total Flight Time"))
-        e.pic = n("PIC"); e.sic = n("SIC"); e.n = n("Night"); e.x = n("X-Country")
+        var e = LogEntry(d: f.date, r: [apCode(f.from), apCode(f.to)], t: qm(n("Total Flight Time")))
+        e.pic = qm(n("PIC")); e.sic = qm(n("SIC")); e.n = qm(n("Night")); e.x = qm(n("X-Country"))
         e.l = Int(n("Landings")); e.ld = Int(n("FS Day Landings")); e.ln = Int(n("FS Night Landings"))
         e.to = Int(n("Takeoffs (any)")); e.ton = Int(n("Takeoffs - Night"))
         e.reg = f.tail; e.m = cfg.model; e.fn = f.flightNumber; e.src = "app"; e.flightID = f.id; e.duty = f.duty.isEmpty ? "PF" : f.duty

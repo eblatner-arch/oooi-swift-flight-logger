@@ -194,10 +194,15 @@ struct LogEntry: Identifiable {
     init(d: String, r: [String], t: Double) { self.d = d; self.r = r; self.t = t }
 
     init(json e: JSON) {
-        d = jstr(e["d"]); r = jarr(e["r"]).map(jstr); t = jnum(e["t"])
-        pic = jnum(e["pic"]); sic = jnum(e["sic"]); n = jnum(e["n"]); x = jnum(e["x"])
+        d = jstr(e["d"]); r = jarr(e["r"]).map(jstr); t = qm(jnum(e["t"]))
+        pic = qm(jnum(e["pic"])); sic = qm(jnum(e["sic"])); n = qm(jnum(e["n"])); x = qm(jnum(e["x"]))
         l = Int(jnum(e["l"])); ld = Int(jnum(e["ld"])); ln = Int(jnum(e["ln"]))
         to = e["to"].map { Int(jnum($0)) }; ton = e["ton"].map { Int(jnum($0)) }
         reg = jstr(e["reg"]); m = jstr(e["m"]); fn = jstr(e["fn"]); sim = jbool(e["sim"])
     }
 }
+
+/// Hours to the nearest minute. Logbooks keep whole minutes, but decimal hours (1.27) are rounded to
+/// 0.01 h, so summing them drifts a few minutes over a career. Snapping each flight back to its minute
+/// first makes totals match MyFlightbook's exactly.
+func qm(_ v: Double) -> Double { (v * 60).rounded() / 60 }
