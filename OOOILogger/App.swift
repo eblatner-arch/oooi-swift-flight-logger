@@ -15,6 +15,7 @@ struct OOOILoggerApp: App {
                     if let t = ud.string(forKey: "openTab"), let tab = AppTab(rawValue: t) { model.show(tab) }
                     if ud.string(forKey: "openStats") == "search" { model.statsView = "search" }
                     await model.refresh()
+                    model.startLive()
                     if ud.bool(forKey: "demoEdit"), let f = model.flights.sorted(by: { $0.sortKey > $1.sortKey }).first { model.editFlight(f.id) }
                     if ud.string(forKey: "openTab") == "night" { model.openNight() }
                     if ud.bool(forKey: "scrollBottom") { try? await Task.sleep(nanoseconds: 1_000_000_000); model.scrollBottomToken += 1 }
@@ -24,7 +25,16 @@ struct OOOILoggerApp: App {
                         if UIApplication.shared.applicationState == .active { await model.refresh() }
                     }
                 }
-                .onChange(of: phase) { _, p in if p == .active { Task { await model.refresh() } } }
+                .onChange(of: phase) { _, p in
+                    if p == .active { model.startLive(); Task { await model.refresh() } }
+                    else if p == .background { model.stopLive() }
+                }
+                .task {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        if UIApplication.shared.applicationState == .active { model.checkLive() }
+                    }
+                }
         }
     }
 }
@@ -97,23 +107,35 @@ struct HeaderView: View {
 
 /// Green when the app is talking to the add-on on the Home Assistant box, gray when it isn't.
 /// Tap it to check again (or to set it up).
+/// Live, like the Flight Tracker app: green while the add-on's change stream is open, amber while
+/// connecting, gray on the phone's saved copy. The dot pulses when a change arrives. Tap to reconnect.
 struct HABadge: View {
     @EnvironmentObject var m: AppModel
+    @State private var pulse = false
     var body: some View {
-        let on = m.conn == .ok
+        let offline = m.conn == .offline || m.conn == .notSetUp || m.conn == .needsLogin
+        let c: Color = m.live ? T.good : offline ? T.muted : T.warn
+        let text = m.live ? "Live" : offline ? "Offline" : "Connecting"
         Button {
-            if m.conn == .notSetUp || m.conn == .needsLogin { m.show(.set) } else { Task { await m.refresh() } }
+            if m.conn == .notSetUp || m.conn == .needsLogin { m.show(.set) }
+            else { m.startLive(force: true); Task { await m.refresh() } }
         } label: {
             HStack(spacing: 6) {
-                Circle().fill(on ? T.good : T.muted.opacity(0.7)).frame(width: 10, height: 10)
-                Text("HA").font(F.display(13, 600)).tracking(0.78).foregroundStyle(on ? T.ink : T.muted)
+                Circle().fill(c).frame(width: 9, height: 9)
+                    .overlay(Circle().stroke(c.opacity(pulse ? 0 : 0.7), lineWidth: pulse ? 9 : 0).scaleEffect(pulse ? 2.2 : 1))
+                Text(text).font(F.display(13, 600)).tracking(0.78).textCase(.uppercase).foregroundStyle(m.live ? T.good : T.muted)
             }
             .padding(.vertical, 5).padding(.horizontal, 10)
             .background(Capsule().fill(T.surface))
-            .overlay(Capsule().stroke(T.line, lineWidth: 1))
+            .overlay(Capsule().stroke(m.live ? T.good.opacity(0.4) : T.line, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(on ? "Connected to Home Assistant" : "Not connected to Home Assistant")
+        .onChange(of: m.liveFlash) { _, _ in
+            pulse = false
+            withAnimation(.easeOut(duration: 0.9)) { pulse = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) { pulse = false }
+        }
+        .accessibilityLabel(m.live ? "Live: connected to Home Assistant" : offline ? "Offline: showing the saved copy" : "Connecting to Home Assistant")
     }
 }
 

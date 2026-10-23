@@ -70,6 +70,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var outbox: [OutOp] = []
     @Published private(set) var apVersion = 0
     @Published var syncingNow = false
+    /// Live: the add-on's change stream is open and pinging (green dot, like the Flight Tracker app)
+    @Published private(set) var live = false
+    @Published private(set) var liveFlash = 0
 
     // UI state
     @Published var toastText: String?
@@ -229,6 +232,55 @@ final class AppModel: ObservableObject {
                 if !drive.syncing && n >= 3 { return }
             }
         }
+    }
+
+    // MARK: - Live (server-sent events from the add-on)
+
+    private var streamTask: Task<Void, Never>?
+    private var lastSeen = Date.distantPast
+    private var liveRefreshTask: Task<Void, Never>?
+
+    /// Keep a stream open to api/events. Each change refreshes at once; pings keep Live green.
+    /// iOS stops the stream when the app goes to the background, so it's restarted on coming back,
+    /// and whenever nothing (not even a ping) has arrived for 35 s.
+    func startLive(force: Bool = false) {
+        guard api.configured else { live = false; return }
+        if streamTask != nil && !force && Date().timeIntervalSince(lastSeen) < 20 { return }
+        streamTask?.cancel()
+        streamTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                do {
+                    let bytes = try await self.api.events()
+                    var event = ""
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { break }
+                        if line.hasPrefix("event:") { event = line.dropFirst(6).trimmingCharacters(in: .whitespaces); continue }
+                        guard line.hasPrefix("data:") else { continue }
+                        self.lastSeen = Date(); self.live = true
+                        if event == "ping" { event = ""; continue }
+                        event = ""
+                        self.liveFlash += 1
+                        self.liveRefreshTask?.cancel()
+                        self.liveRefreshTask = Task {   // a burst of changes is one refresh
+                            try? await Task.sleep(nanoseconds: 600_000_000)
+                            if !Task.isCancelled { await self.refresh() }
+                        }
+                    }
+                } catch {}
+                self.live = false
+                if Task.isCancelled { return }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    func stopLive() { streamTask?.cancel(); streamTask = nil; live = false }
+
+    /// Called every few seconds: a stream that has gone quiet is dead even if it looks open.
+    func checkLive() {
+        if live && Date().timeIntervalSince(lastSeen) > 35 { live = false; startLive(force: true) }
+        else if streamTask == nil { startLive() }
     }
 
     // MARK: - Outbox
@@ -569,7 +621,7 @@ final class AppModel: ObservableObject {
         do {
             try await api.login(password: password)
             await refresh()
-            if conn == .ok { toast("Connected to Home Assistant") }
+            if conn == .ok { toast("Connected to Home Assistant"); startLive(force: true) }
             else if conn == .needsLogin { toast("Home Assistant wants the app password.") }
             else { toast("Cannot reach Home Assistant at that address.") }
         } catch {

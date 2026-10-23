@@ -76,6 +76,17 @@ final class API {
         return j
     }
 
+    /// The add-on's change stream (server-sent events): a line per change and a ping every 15 s.
+    func events() async throws -> URLSession.AsyncBytes {
+        guard let u = url("api/events") else { throw APIError.unreachable }
+        var req = URLRequest(url: u, timeoutInterval: 45)
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        if !token.isEmpty { req.setValue("oooi_auth=\(token)", forHTTPHeaderField: "Cookie") }
+        let (bytes, resp) = try await session.bytes(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError(message: "No live stream", status: (resp as? HTTPURLResponse)?.statusCode ?? 0) }
+        return bytes
+    }
+
     /// POST api/login and keep the cookie it sets.
     func login(password: String) async throws {
         let body = try JSONSerialization.data(withJSONObject: ["password": password])

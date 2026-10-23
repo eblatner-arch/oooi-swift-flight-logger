@@ -313,6 +313,16 @@ def upsert(token, g, key, name, mime, content, folder):
 
 SYNC = {'timer': None, 'running': False, 'again': False}
 
+# Live updates: every change bumps CHANGE_V; open /api/events streams send it to the apps at once.
+CHANGE = threading.Condition()
+CHANGE_V = [0]
+
+
+def bump():
+    with CHANGE:
+        CHANGE_V[0] += 1
+        CHANGE.notify_all()
+
 
 def schedule_sync(delay=2.0):
     with LOCK:
@@ -322,6 +332,7 @@ def schedule_sync(delay=2.0):
         t.daemon = True
         SYNC['timer'] = t
         t.start()
+    bump()   # Drive: changes waiting
 
 
 def run_sync():
@@ -330,12 +341,15 @@ def run_sync():
             SYNC['again'] = True
             return
         SYNC['running'] = True
+        SYNC['timer'] = None
+    bump()   # Drive: syncing
     try:
         do_sync()
     finally:
         with LOCK:
             SYNC['running'] = False
             again, SYNC['again'] = SYNC['again'], False
+        bump()   # Drive: synced or failed
         if again:
             run_sync()
 
@@ -730,6 +744,21 @@ def update_airports():
 
 
 # ---------------- API ----------------
+def drive_state(o, g, pending=None):
+    """One word for the Drive pill: off, disconnected, syncing, waiting, error or synced."""
+    if not (o['google_client_id'] and o['google_client_secret']):
+        return 'off'
+    if not g.get('refresh_token'):
+        return 'disconnected'
+    if SYNC['running']:
+        return 'syncing'
+    if SYNC['timer'] is not None and SYNC['timer'].is_alive():
+        return 'waiting'
+    if g.get('last_error'):
+        return 'error'
+    return 'synced'
+
+
 def state():
     o = options()
     with LOCK:
@@ -740,7 +769,7 @@ def state():
         'drive': {
             'configured': bool(o['google_client_id'] and o['google_client_secret']), 'connected': bool(g.get('refresh_token')),
             'email': g.get('email', ''), 'last_sync': g.get('last_sync'), 'last_error': g.get('last_error'), 'folder_id': g.get('folder_id'),
-            'folder': o['drive_folder'], 'syncing': SYNC['running'],
+            'folder': o['drive_folder'], 'syncing': SYNC['running'], 'state': drive_state(o, g, p),
             'pending': ({'user_code': p['user_code'], 'verification_url': p['verification_url'], 'expires_at': p['expires_at'], 'error': p['error']} if p else None),
         },
         'scan': {'configured': bool(o['gemini_api_key'] or o['anthropic_api_key']), 'model': o['gemini_model'],
@@ -774,7 +803,7 @@ def history_info():
 
 def changed():
     write_local_files()
-    schedule_sync()
+    schedule_sync()   # also tells the apps (bump)
 
 
 def _secret():
@@ -920,6 +949,30 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(obj).encode()
         self._send(code, body, 'application/json', 'no-cache' if etag else 'no-store', etag)
 
+    def _events(self):
+        """Server-sent events: one message per change, and a named ping every 15 s so the apps
+        can tell the connection is alive (the green Live dot)."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('X-Accel-Buffering', 'no')
+        self.end_headers()
+        v = CHANGE_V[0]
+        try:
+            self.wfile.write(f'retry: 2000\nevent: ping\ndata: {v}\n\n'.encode())
+            self.wfile.flush()
+            while True:
+                with CHANGE:
+                    CHANGE.wait_for(lambda: CHANGE_V[0] != v, timeout=15)
+                if CHANGE_V[0] != v:
+                    v = CHANGE_V[0]
+                    self.wfile.write(f'data: {v}\n\n'.encode())
+                else:
+                    self.wfile.write(f'event: ping\ndata: {v}\n\n'.encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
+
     def _body(self):
         n = int(self.headers.get('Content-Length') or 0)
         if n > 25 * 1024 * 1024:
@@ -935,6 +988,8 @@ class Handler(BaseHTTPRequestHandler):
         p = self._route()
         if p == '/api/state':
             return self._json(200, state())
+        if p == '/api/events':
+            return self._events()
         if p == '/api/history':
             h = load('history.json', None) or {'entries': []}
             entries, unknown, n = hist.resolve(h.get('entries') or [])
@@ -1127,6 +1182,7 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 save('history.json', {'imported_at': now_iso(), 'file': name, 'summary': summary, 'entries': entries})
             log.info('Imported MyFlightbook history: %d flights (%s to %s)', summary['flights'], summary['first'], summary['last'])
+            bump()
             return self._json(200, {'ok': True, 'history': history_info()})
         if p == '/api/history/delete':
             with LOCK:
@@ -1134,18 +1190,22 @@ class Handler(BaseHTTPRequestHandler):
                     os.remove(_path('history.json'))
                 except FileNotFoundError:
                     pass
+            bump()
             return self._json(200, {'ok': True})
         if p == '/api/drive/cancel':
             DEVICE['pending'] = None
+            bump()
             return self._json(200, {'ok': True})
         if p == '/api/drive/sync':
             ok = do_sync(force=True)
+            bump()
             return self._json(200 if ok else 502, {'ok': ok, 'drive': state()['drive']})
         if p == '/api/drive/disconnect':
             with LOCK:
                 g = google_state()
                 tok = g.get('refresh_token')
                 save('google.json', {})
+            bump()
             if tok:
                 try:
                     form_post('https://oauth2.googleapis.com/revoke', {'token': tok})
