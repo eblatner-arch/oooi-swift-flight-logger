@@ -438,6 +438,23 @@ HEDGE_AFTER = (0, 4, 9)
 GEMINI_LIMIT = 90
 
 
+def gemini_models_hint():
+    """'Your key can use: …' — the Flash models this key can actually call (from Google's model list)."""
+    o = options()
+    try:
+        _, body = http('GET', f"{GEMINI_BASE}?key={urllib.parse.quote(o['gemini_api_key'])}&pageSize=200", timeout=10)
+        names = [m['name'].split('/', 1)[-1] for m in json.loads(body).get('models', [])
+                 if 'generateContent' in (m.get('supportedGenerationMethods') or [])]
+        flash = sorted({n for n in names if 'flash' in n and 'image' not in n and 'tts' not in n and 'live' not in n
+                        and 'audio' not in n}, reverse=True)
+        if flash:
+            log.info('Gemini models this key can use: %s', ', '.join(names))
+            return 'Your key can use: ' + ', '.join(flash[:8]) + '. '
+    except Exception:
+        pass
+    return ''
+
+
 def _gemini_error(e, model):
     msg = ''
     try:
@@ -447,9 +464,20 @@ def _gemini_error(e, model):
     return {
         400: 'Gemini rejected the request. Check gemini_api_key in the add-on Configuration.' if 'key' in msg.lower() else f'Gemini error: {msg}',
         403: 'Gemini refused the key. Check it in the add-on Configuration.',
-        404: f'Gemini has no model named "{model}". Change gemini_model in the add-on Configuration.',
+        404: f'Gemini has no model named "{model}" for your key. {gemini_models_hint()}Change gemini_model in the add-on Configuration.',
         429: 'Gemini free-tier limit reached. Wait a minute and scan again.',
     }.get(e.status, f'Gemini error ({e.status}). {msg}')
+
+
+THINKING = {}   # model -> thinking settings to try, first one known to work
+
+
+def _thinking_options(model):
+    if model.startswith('gemini-2.5-flash'):
+        return [{'thinkingBudget': 0}, None]
+    if 'flash' in model:
+        return [{'thinkingLevel': 'minimal'}, {'thinkingLevel': 'low'}, None]
+    return [None]
 
 
 def gemini_scan(jpeg):
@@ -458,16 +486,28 @@ def gemini_scan(jpeg):
         return 400, {'error': 'Add gemini_api_key in the add-on Configuration tab to scan.'}
     model = o['gemini_model']
     url = f"{GEMINI_BASE}/{urllib.parse.quote(model)}:generateContent?key={urllib.parse.quote(o['gemini_api_key'])}"
-    gen = {'responseMimeType': 'application/json', 'temperature': 0}
-    if 'flash' in model and (model.startswith('gemini-3') or model.startswith('gemini-4')):
-        gen['thinkingConfig'] = {'thinkingLevel': 'minimal'}   # reading a screen needs no reasoning
-    body = json.dumps({
-        'contents': [{'role': 'user', 'parts': [{'text': SCAN_PROMPT}, {'inline_data': {'mime_type': 'image/jpeg', 'data': base64.b64encode(jpeg).decode()}}]}],
-        'generationConfig': gen,
-    }).encode()
+    image = {'inline_data': {'mime_type': 'image/jpeg', 'data': base64.b64encode(jpeg).decode()}}
+
+    def body_for(thinking):
+        gen = {'responseMimeType': 'application/json', 'temperature': 0}
+        if thinking:
+            gen['thinkingConfig'] = thinking
+        return json.dumps({'contents': [{'role': 'user', 'parts': [{'text': SCAN_PROMPT}, image]}], 'generationConfig': gen}).encode()
 
     def call():
-        return http('POST', url, body, {'Content-Type': 'application/json'}, timeout=GEMINI_LIMIT)[1]
+        # Least thinking the model accepts (reading a screen needs no reasoning). Models differ in which
+        # levels they take, so on a "not supported" answer try the next one and remember what worked.
+        opts = THINKING.get(model) or _thinking_options(model)
+        for k, thinking in enumerate(opts):
+            try:
+                res = http('POST', url, body_for(thinking), {'Content-Type': 'application/json'}, timeout=GEMINI_LIMIT)[1]
+                THINKING[model] = opts[k:]
+                return res
+            except HttpError as e:
+                if e.status == 400 and 'think' in (e.body or '').lower() and k + 1 < len(opts):
+                    log.info('Gemini %s: thinking setting %s not accepted, trying %s', model, thinking, opts[k + 1])
+                    continue
+                raise
 
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=len(HEDGE_AFTER))
