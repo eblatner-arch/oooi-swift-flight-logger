@@ -1,0 +1,2 @@
+2026-10-28 02:11:43,554 INFO Airport database: 7885 airports (bundled)
+2026-10-28 02:13:28,955 INFO OOOI Flight Logger listening on 8099 (ingress) and 8199 (direct, no password), data /tmp/oooi/data, files /tmp/oooi/share
