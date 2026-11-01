@@ -463,7 +463,7 @@ struct FindRow: View {
         let meta = [fmtDate(e.d, .weekdayDay), e.fn.isEmpty ? "" : fltNo(e.fn), e.reg, e.m].filter { !$0.isEmpty }.joined(separator: " · ")
         let shell = RowShell(route: e.r.isEmpty ? "—" : e.r.joined(separator: "–"), meta: meta, time: fmtH(e.t, fmt)) {
             if e.sim { Chip("Sim") }
-            else if let d = e.duty { Chip(d, d == "PF" ? .pf : .plain) }
+            else if let d = e.duty { Chip(d, d.hasPrefix("PF") ? .pf : .plain) }
             else if e.l > 0 { Chip("\(e.l) ldg") }
             if e.n > 0 { Chip("Night \(fmtH(e.n, fmt))", .night) }
             if e.ln > 0 { Chip("Night ldg", .night) }

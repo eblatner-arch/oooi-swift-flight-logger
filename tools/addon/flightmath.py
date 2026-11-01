@@ -236,14 +236,24 @@ def compute(f):
     r['night'] = round(r['night_min'] / 60 * 100) / 100
     r['night_to'] = is_night_op(t['off'], a)
     r['night_ldg'] = is_night_op(t['on'], b)
-    pf = (f.get('duty') or 'PF') == 'PF'
-    r['landings'] = 1 if pf else 0
-    r['fs_night'] = 1 if pf and r['night_ldg'] else 0
-    r['fs_day'] = 1 if pf and not r['night_ldg'] else 0
-    r['takeoffs'] = 1 if pf else 0
-    r['night_takeoffs'] = 1 if pf and r['night_to'] else 0
+    to, ldg = did_takeoff(f), did_landing(f)
+    r['landings'] = 1 if ldg else 0
+    r['fs_night'] = 1 if ldg and r['night_ldg'] else 0
+    r['fs_day'] = 1 if ldg and not r['night_ldg'] else 0
+    r['takeoffs'] = 1 if to else 0
+    r['night_takeoffs'] = 1 if to and r['night_to'] else 0
     r['ok'] = True
     return r
+
+
+def did_takeoff(f):
+    """PF logs the takeoff unless it was handed to the other pilot (takeoff: false); PM never does."""
+    return (f.get('duty') or 'PF') == 'PF' and f.get('takeoff') is not False
+
+
+def did_landing(f):
+    """PF logs the full-stop landing unless it was handed to the other pilot (landing: false)."""
+    return (f.get('duty') or 'PF') == 'PF' and f.get('landing') is not False
 
 
 CSV_COLS = ['Date', 'Tail Number', 'Model', 'Landings', 'FS Night Landings', 'FS Day Landings', 'X-Country', 'Night', 'SIC', 'PIC', 'Total Flight Time', 'Route', 'Comments', 'Aircraft Registration', 'Flight Number', 'Crew Start Time (UTC)', 'Block Out Time', 'Flight Start', 'Flight End', 'Block In Time', 'Takeoffs (any)', 'Takeoffs - Night']

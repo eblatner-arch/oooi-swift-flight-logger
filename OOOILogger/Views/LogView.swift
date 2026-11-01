@@ -148,7 +148,8 @@ struct LogView: View {
             VStack(alignment: .leading, spacing: 5) {
                 LabelText("Duty")
                 Seg(options: [SegOption(v: "PF", title: "PF", small: "Logs takeoff + landing"), SegOption(v: "PM", title: "PM", small: "No takeoff or landing")],
-                    value: m.form.duty) { m.form.duty = $0 }
+                    value: m.form.duty) { m.setDuty($0) }
+                OpsToggles(from: f.from, to: f.to).padding(.top, 3)
             }
             VStack(alignment: .leading, spacing: 5) {
                 LabelText("Time logged as")
@@ -287,8 +288,8 @@ struct LogView: View {
                     }
                     FlowLayout {
                         if m.form.duty == "PF" {
-                            Chip(r.nightTO ? "Night takeoff" : "Day takeoff", r.nightTO ? .night : .day)
-                            Chip(r.nightLdg ? "Night FS landing" : "Day FS landing", r.nightLdg ? .night : .day)
+                            if m.form.takeoff { Chip(r.nightTO ? "Night takeoff" : "Day takeoff", r.nightTO ? .night : .day) } else { Chip("Takeoff by other pilot") }
+                            if m.form.landing { Chip(r.nightLdg ? "Night FS landing" : "Day FS landing", r.nightLdg ? .night : .day) } else { Chip("Landing by other pilot") }
                         } else { Chip("PM · no takeoff or landing") }
                         if !f.flightNumber.isEmpty { Chip(fltNo(f.flightNumber)) }
                         if !f.tail.isEmpty { Chip(f.tail) }
@@ -351,5 +352,35 @@ struct CameraPicker: UIViewControllerRepresentable {
             parent.dismiss()
         }
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
+    }
+}
+
+/// Takeoff / Landing under PF / PM: both on for PF; tap one off when the other pilot flew it.
+struct OpsToggles: View {
+    @EnvironmentObject var m: AppModel
+    let from: String
+    let to: String
+    var body: some View {
+        HStack(spacing: 0) {
+            button("Takeoff", on: m.form.takeoff && m.form.duty == "PF", at: from) { m.toggleOp(takeoff: true) }
+            Rectangle().fill(T.line).frame(width: 1)
+            button("Landing", on: m.form.landing && m.form.duty == "PF", at: to) { m.toggleOp(takeoff: false) }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(T.line, lineWidth: 1))
+    }
+    private func button(_ title: String, on: Bool, at code: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Text(title).font(F.display(15, 700)).tracking(0.75)
+                Text(on ? "You fly it" + (code.count == 4 ? " at \(code)" : "") : "Other pilot").font(F.body(12, 500))
+            }
+            .foregroundStyle(on ? T.accentInk : T.muted)
+            .padding(.vertical, 9).padding(.horizontal, 6)
+            .frame(maxWidth: .infinity)
+            .background(on ? T.accent : T.bg)
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain)
     }
 }

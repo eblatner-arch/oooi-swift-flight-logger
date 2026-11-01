@@ -22,6 +22,8 @@ struct FormState: Equatable {
     var crew = "", out = "", off = "", on = "", inTime = ""
     var comments = ""
     var duty = "PF"
+    var takeoff = true
+    var landing = true
     var seat = "PIC"
     /// Boxes under Comments, keyed "field:<id>" or "ov:<column>"
     var custom: [String: String] = [:]
@@ -376,6 +378,7 @@ final class AppModel: ObservableObject {
         f.from = tr(form.from).uppercased(); f.to = tr(form.to).uppercased()
         f.crew = digits(form.crew); f.out = digits(form.out); f.off = digits(form.off); f.on = digits(form.on); f.inTime = digits(form.inTime)
         f.comments = tr(form.comments); f.duty = form.duty; f.seat = form.seat; f.approaches = 0
+        f.takeoff = form.duty == "PF" && form.takeoff; f.landing = form.duty == "PF" && form.landing
         for b in logBoxes {
             let v = tr(form.custom[b.id] ?? ""); if v.isEmpty { continue }
             if b.kind == "field" { f.extra[b.key] = v } else { f.override[b.key] = HOUR_SRC.contains(b.src) ? toCsvHours(v) : v }
@@ -388,7 +391,7 @@ final class AppModel: ObservableObject {
         var s = FormState()
         s.date = f.date; s.flightNumber = f.flightNumber; s.tail = f.tail; s.from = f.from; s.to = f.to
         s.crew = f.crew; s.out = f.out; s.off = f.off; s.on = f.on; s.inTime = f.inTime; s.comments = f.comments
-        s.duty = f.duty.isEmpty ? "PF" : f.duty; s.seat = f.seat.isEmpty ? cfg.seat : f.seat
+        s.duty = f.duty.isEmpty ? "PF" : f.duty; s.takeoff = f.didTakeoff; s.landing = f.didLanding; s.seat = f.seat.isEmpty ? cfg.seat : f.seat
         let isNew = f.id.isEmpty
         for b in logBoxes {
             if b.kind == "field" { s.custom[b.id] = isNew ? b.def : (f.extra[b.key] ?? "") }
@@ -454,6 +457,15 @@ final class AppModel: ObservableObject {
     static func enc(_ s: String) -> String {
         var allowed = CharacterSet.alphanumerics; allowed.insert(charactersIn: "-_.!~*'()")
         return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
+    }
+
+    /// PF turns on both; PM turns both off.
+    func setDuty(_ d: String) { form.duty = d; form.takeoff = d == "PF"; form.landing = d == "PF" }
+    /// Tap Takeoff or Landing: both off is PM, one on from PM is PF.
+    func toggleOp(takeoff t: Bool) {
+        if form.duty == "PM" { form.takeoff = false; form.landing = false }
+        if t { form.takeoff.toggle() } else { form.landing.toggle() }
+        form.duty = form.takeoff || form.landing ? "PF" : "PM"
     }
 
     func show(_ t: AppTab) {

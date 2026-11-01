@@ -1070,8 +1070,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {'error': 'Bad JSON'})
         if p.startswith('/api/flights/'):
             fid = urllib.parse.unquote(p.split('/api/flights/', 1)[1])
-            keep = ('date', 'flightNumber', 'tail', 'from', 'to', 'crew', 'out', 'off', 'on', 'in', 'comments', 'duty', 'seat', 'approaches', 'imported', 'createdAt')
+            keep = ('date', 'flightNumber', 'tail', 'from', 'to', 'crew', 'out', 'off', 'on', 'in', 'comments', 'duty', 'takeoff', 'landing', 'seat', 'approaches', 'imported', 'createdAt')
             f = {k: data.get(k) for k in keep if k in data}
+            for k in ('takeoff', 'landing'):     # PF split: who did the takeoff and who did the landing
+                if k in f:
+                    f[k] = f[k] is not False and f[k] != 'false'
+            if f.get('duty') == 'PF' and f.get('takeoff') is False and f.get('landing') is False:
+                f['duty'] = 'PM'
             if isinstance(data.get('extra'), dict):  # values for columns typed in on the Log screen
                 f['extra'] = {str(k)[:16]: str(v)[:500] for k, v in list(data['extra'].items())[:30] if str(v).strip()}
             if isinstance(data.get('override'), dict):  # per-flight edits to automatic columns

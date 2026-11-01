@@ -73,7 +73,7 @@ func appEntries(_ flights: [Flight], _ cfg: Cfg) -> [LogEntry] {
         e.pic = qm(n("PIC")); e.sic = qm(n("SIC")); e.n = qm(n("Night")); e.x = qm(n("X-Country"))
         e.l = Int(n("Landings")); e.ld = Int(n("FS Day Landings")); e.ln = Int(n("FS Night Landings"))
         e.to = Int(n("Takeoffs (any)")); e.ton = Int(n("Takeoffs - Night"))
-        e.reg = f.tail; e.m = cfg.model; e.fn = f.flightNumber; e.src = "app"; e.flightID = f.id; e.duty = f.duty.isEmpty ? "PF" : f.duty
+        e.reg = f.tail; e.m = cfg.model; e.fn = f.flightNumber; e.src = "app"; e.flightID = f.id; e.duty = f.dutyLabel
         out.append(e)
     }
     return out

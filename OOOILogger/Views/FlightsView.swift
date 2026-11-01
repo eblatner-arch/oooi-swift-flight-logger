@@ -68,9 +68,9 @@ struct FlightRow: View {
             RowShell(route: "\(f.from)–\(f.to)",
                      meta: "\(fmtDate(f.date, .weekdayDay)) · \(f.flightNumber.isEmpty ? "—" : fltNo(f.flightNumber)) · \(f.tail.isEmpty ? "no reg" : f.tail)",
                      time: r.ok ? fmtMin(r.totalMin, m.cfg.timeFmt) : "—") {
-                Chip(f.duty.isEmpty ? "PF" : f.duty, f.duty == "PM" ? .plain : .pf)
+                Chip(f.dutyLabel, f.dutyLabel == "PM" ? .plain : .pf)
                 if r.ok && r.nightMin > 0 { Chip("Night \(fmtMin(r.nightMin, m.cfg.timeFmt))", .night) }
-                if r.ok && f.duty == "PF" && r.nightLdg { Chip("Night ldg", .night) }
+                if r.ok && f.didLanding && r.nightLdg { Chip("Night ldg", .night) }
                 Chip(f.imported ? "Imported" : "Pending", f.imported ? .ok : .pend)
             }
         }.buttonStyle(.plain)

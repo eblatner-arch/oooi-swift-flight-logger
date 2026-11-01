@@ -92,8 +92,8 @@ struct NightView: View {
         Card {
             LabelText("Takeoff and landing · 14 CFR 61.57(b)")
             VStack(spacing: 12) {
-                opCard("Takeoff", t.off!, a, f.from, r.nightTO, f.duty)
-                opCard("Landing", t.on!, b, f.to, r.nightLdg, f.duty)
+                opCard("Takeoff", t.off!, a, f.from, r.nightTO, f.duty, f.didTakeoff)
+                opCard("Landing", t.on!, b, f.to, r.nightLdg, f.duty, f.didLanding)
             }
             Small("A takeoff or landing counts as night between one hour after sunset and one hour before sunrise at that airport. Sunset and sunrise use the sun's upper edge at the horizon (−0.833°).")
         }
@@ -115,7 +115,7 @@ struct NightView: View {
         }.joined(separator: "; ") + "."
     }
 
-    private func opCard(_ kind: String, _ ms: Double, _ ap: LatLon, _ code: String, _ isNight: Bool, _ duty: String) -> some View {
+    private func opCard(_ kind: String, _ ms: Double, _ ap: LatLon, _ code: String, _ isNight: Bool, _ duty: String, _ did: Bool) -> some View {
         let c = crossings(ms, ap), H = 3600000.0
         var rows: [(String, String)] = []
         let z: (Double?) -> String = { $0.map(zt) ?? "—" }
@@ -133,7 +133,8 @@ struct NightView: View {
             }
         }
         rows.append(("Sun at " + kind.lowercased(), String(format: "%.1f°", sunAlt(ms, ap.lat, ap.lon))))
-        let note = duty == "PF" ? (isNight ? "Logged as a night \(kind.lowercased())." : "Logged as a day \(kind.lowercased()).") : "You were PM, so no \(kind.lowercased()) is logged."
+        let note = did ? (isNight ? "Logged as a night \(kind.lowercased())." : "Logged as a day \(kind.lowercased()).")
+            : duty == "PF" ? "The other pilot flew the \(kind.lowercased()), so none is logged." : "You were PM, so no \(kind.lowercased()) is logged."
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("\(kind) · \(code) · \(zt(ms))").font(F.display(17, 600)).tracking(0.5).foregroundStyle(T.ink)

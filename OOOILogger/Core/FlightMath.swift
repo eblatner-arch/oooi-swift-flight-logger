@@ -224,12 +224,12 @@ func compute(_ f: Flight) -> Calc {
     r.nightTO = isNightOp(off, a.p)
     r.nightLdg = isNightOp(on, b.p)
     r.distNm = Int(jsRound(distNm(a.p, b.p)))
-    let pf = (f.duty.isEmpty ? "PF" : f.duty) == "PF"
-    r.landings = pf ? 1 : 0
-    r.fsNight = pf && r.nightLdg ? 1 : 0
-    r.fsDay = pf && !r.nightLdg ? 1 : 0
-    r.takeoffs = pf ? 1 : 0
-    r.nightTakeoffs = pf && r.nightTO ? 1 : 0
+    let to = f.didTakeoff, ldg = f.didLanding
+    r.landings = ldg ? 1 : 0
+    r.fsNight = ldg && r.nightLdg ? 1 : 0
+    r.fsDay = ldg && !r.nightLdg ? 1 : 0
+    r.takeoffs = to ? 1 : 0
+    r.nightTakeoffs = to && r.nightTO ? 1 : 0
     r.ok = true
     return r
 }

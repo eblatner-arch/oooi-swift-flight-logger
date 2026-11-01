@@ -53,6 +53,9 @@ struct Flight: Identifiable, Equatable {
     var inTime = ""
     var comments = ""
     var duty = "PF"
+    /// PF split: false when the other pilot flew the takeoff / landing (absent = flew both as PF)
+    var takeoff = true
+    var landing = true
     var seat = ""
     var approaches = 0
     var imported = false
@@ -68,6 +71,8 @@ struct Flight: Identifiable, Equatable {
         from = jstr(j["from"]); to = jstr(j["to"]); crew = jstr(j["crew"]); out = jstr(j["out"]); off = jstr(j["off"])
         on = jstr(j["on"]); inTime = jstr(j["in"]); comments = jstr(j["comments"])
         duty = jstr(j["duty"]); if duty.isEmpty { duty = "PF" }
+        takeoff = j["takeoff"].map { !(jstr($0) == "false") } ?? true
+        landing = j["landing"].map { !(jstr($0) == "false") } ?? true
         seat = jstr(j["seat"]); approaches = Int(jnum(j["approaches"])); imported = jbool(j["imported"])
         createdAt = jstr(j["createdAt"]); updatedAt = jstr(j["updatedAt"])
         extra = jstrDict(j["extra"]); override = jstrDict(j["override"])
@@ -76,7 +81,7 @@ struct Flight: Identifiable, Equatable {
     /// The body the Log screen PUTs (readForm in app-ha.js).
     var putBody: JSON {
         ["date": date, "flightNumber": flightNumber, "tail": tail, "from": from, "to": to, "crew": crew, "out": out,
-         "off": off, "on": on, "in": inTime, "comments": comments, "duty": duty, "seat": seat, "approaches": approaches,
+         "off": off, "on": on, "in": inTime, "comments": comments, "duty": duty, "takeoff": duty == "PF" && takeoff, "landing": duty == "PF" && landing, "seat": seat, "approaches": approaches,
          "extra": extra, "override": override]
     }
 
@@ -206,3 +211,11 @@ struct LogEntry: Identifiable {
 /// 0.01 h, so summing them drifts a few minutes over a career. Snapping each flight back to its minute
 /// first makes totals match MyFlightbook's exactly.
 func qm(_ v: Double) -> Double { (v * 60).rounded() / 60 }
+
+extension Flight {
+    /// PF logs the takeoff and the landing unless one was handed to the other pilot; PM logs neither.
+    var didTakeoff: Bool { (duty.isEmpty ? "PF" : duty) == "PF" && takeoff }
+    var didLanding: Bool { (duty.isEmpty ? "PF" : duty) == "PF" && landing }
+    /// PF, PF · T/O, PF · LDG or PM
+    var dutyLabel: String { (duty.isEmpty ? "PF" : duty) != "PF" ? "PM" : didTakeoff && didLanding ? "PF" : didTakeoff ? "PF · T/O" : didLanding ? "PF · LDG" : "PM" }
+}
