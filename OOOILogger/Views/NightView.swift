@@ -8,7 +8,7 @@ func trackSamples(_ t: Times, _ a: LatLon, _ b: LatLon) -> [Sample] {
     guard let off = t.off, let on = t.on, let inT = t.inT else { return [] }
     var out: [Sample] = []
     let span = on - off
-    var s = t.out
+    var s = t.crew ?? t.out
     while s < inT {
         let m = s + 30000
         let f = span > 0 ? min(max((m - off) / span, 0), 1) : 0
@@ -74,7 +74,7 @@ struct NightView: View {
             }
             ThreeCol {
                 StatTile(value: fmtMin(r.nightMin, fmt), label: "Night")
-                StatTile(value: fmtMin(r.blockMin, fmt), label: "Block, OUT→IN")
+                StatTile(value: fmtMin(r.totalMin, fmt), label: "Trip, CREW→IN")
                 StatTile(value: "\(r.distNm)", label: "Great circle nm")
             }
             Small(segText(smp, t, f))
@@ -82,7 +82,7 @@ struct NightView: View {
         Card {
             LabelText("Sun elevation at the aircraft")
             SunChart(smp: smp, t: t).aspectRatio(340 / 190, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 8))
-            Small("Night is logged for every minute the sun is below −6° (shaded), from OUT to IN. Before OFF the aircraft is at the departure airport, after ON at the arrival airport, and in between it moves along the great-circle route.")
+            Small("Night is logged for every minute the sun is below −6° (shaded), from CREW to IN (the TRIP time). Before OFF the aircraft is at the departure airport, after ON at the arrival airport, and in between it moves along the great-circle route.")
         }
         Card {
             LabelText("Route")
@@ -168,7 +168,8 @@ struct SunChart: View {
             guard let off = t.off, let on = t.on, let inT = t.inT, !smp.isEmpty else { return }
             var lo = min(-10, smp.map(\.alt).min()!), hi = max(5, smp.map(\.alt).max()!)
             lo = (lo / 5).rounded(.down) * 5; hi = (hi / 5).rounded(.up) * 5
-            let x: (Double) -> Double = { L + ($0 - t.out) / (inT - t.out) * (W - L - R) }
+            let t0 = t.crew ?? t.out
+            let x: (Double) -> Double = { L + ($0 - t0) / (inT - t0) * (W - L - R) }
             let y: (Double) -> Double = { Tp + (hi - $0) / (hi - lo) * (H - Tp - B) }
             ctx.fill(Path(CGRect(x: L, y: y(-6), width: W - L - R, height: y(lo) - y(-6))), with: .color(T.nightSoft))
             ctx.fill(Path(CGRect(x: L, y: y(-0.833), width: W - L - R, height: y(-6) - y(-0.833))), with: .color(T.twiSoft))
@@ -189,7 +190,7 @@ struct SunChart: View {
             }
             ctx.draw(Text("OFF " + zt(off)).font(F.mono(10)).foregroundStyle(T.ink), at: CGPoint(x: max(x(off), L), y: 8), anchor: .leading)
             ctx.draw(Text("ON " + zt(on)).font(F.mono(10)).foregroundStyle(T.ink), at: CGPoint(x: min(x(on), W - R), y: 8), anchor: .trailing)
-            ctx.draw(Text("OUT " + zt(t.out)).font(F.mono(10)).foregroundStyle(T.muted), at: CGPoint(x: L, y: H - 12), anchor: .leading)
+            ctx.draw(Text((t.crew != nil ? "CREW " : "OUT ") + zt(t0)).font(F.mono(10)).foregroundStyle(T.muted), at: CGPoint(x: L, y: H - 12), anchor: .leading)
             ctx.draw(Text("IN " + zt(inT)).font(F.mono(10)).foregroundStyle(T.muted), at: CGPoint(x: W - R, y: H - 12), anchor: .trailing)
             // elevation line, colored by state
             var pts: [CGPoint] = []; var runCat = -1; var runCol = T.day

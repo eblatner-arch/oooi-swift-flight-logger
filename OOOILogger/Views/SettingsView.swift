@@ -50,7 +50,7 @@ struct SettingsView: View {
             ColumnsCard(open: $csvOpen)
             Card {
                 LabelText("How it calculates")
-                Small("Total time runs from CREW to IN, the same as the TRIP time on the ACARS page. Night time counts every minute from OUT to IN when the sun is more than 6° below the horizon (civil twilight) at the aircraft's position along the great-circle route. A takeoff or landing is night when it falls between one hour after sunset and one hour before sunrise at that airport (14 CFR 61.57(b)). Times are UTC; the date is the local date at departure.")
+                Small("Total time runs from CREW to IN, the same as the TRIP time on the ACARS page. Night time counts every minute from CREW to IN when the sun is more than 6° below the horizon (civil twilight) at the aircraft's position along the great-circle route. A takeoff or landing is night when it falls between one hour after sunset and one hour before sunrise at that airport (14 CFR 61.57(b)). Times are UTC; the date is the local date at departure.")
             }
             driveCard
             historyCard

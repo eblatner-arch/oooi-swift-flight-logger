@@ -112,7 +112,7 @@ func nightMinutes(_ t: Times, _ a: LatLon, _ b: LatLon) -> Int {
     guard let off = t.off, let on = t.on, let inT = t.inT else { return 0 }
     var n = 0
     let span = on - off
-    var s = t.out
+    var s = t.crew ?? t.out   // from CREW (trip start, same as total time) to IN
     while s < inT {
         let m = s + 30000
         let f = span > 0 ? min(max((m - off) / span, 0), 1) : 0

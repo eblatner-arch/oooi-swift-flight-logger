@@ -147,8 +147,9 @@ def dist_nm(a, b):
 
 
 def night_minutes(t, a, b):
+    # From CREW (trip start, same as total time) to IN; OUT if no CREW time.
     n, span = 0, t['on'] - t['off']
-    s = t['out']
+    s = t['crew'] if t.get('crew') is not None else t['out']
     while s < t['in']:
         m = s + 30000
         f = min(max((m - t['off']) / span, 0), 1) if span > 0 else 0
