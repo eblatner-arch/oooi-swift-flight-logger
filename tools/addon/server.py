@@ -77,7 +77,7 @@ def options():
     return {
         'gemini_api_key': (o.get('gemini_api_key') or '').strip(),
         'gemini_model': (o.get('gemini_model') or 'gemini-3.5-flash-lite').strip(),
-        'gemini_backup_model': (o.get('gemini_backup_model') if o.get('gemini_backup_model') is not None else 'gemini-3.6-flash').strip(),
+        'gemini_backup_model': (o.get('gemini_backup_model') if o.get('gemini_backup_model') is not None else 'gemini-3.6-flash, gemini-3.8-flash').strip(),
         'anthropic_api_key': (o.get('anthropic_api_key') or '').strip(),
         'claude_model': (o.get('claude_model') or 'claude-haiku-5-5').strip(),
         'scan_provider': (o.get('scan_provider') or 'auto').strip().lower(),
@@ -466,8 +466,8 @@ def _gemini_error(e, model):
         400: 'Gemini rejected the request. Check gemini_api_key in the add-on Configuration.' if 'key' in msg.lower() else f'Gemini error: {msg}',
         403: 'Gemini refused the key. Check it in the add-on Configuration.',
         404: f'Gemini has no model named "{model}" for your key. {gemini_models_hint()}Change gemini_model in the add-on Configuration.',
-        429: f'Gemini free-tier limit reached for {model}. Wait a minute and scan again.',
-        503: f'Gemini {model} is busy right now (high demand). Scan again, or set gemini_backup_model.',
+        429: f'QUOTA:{model}',
+        503: f'BUSY:{model}',
     }.get(e.status, f'Gemini error ({e.status}). {msg}')
 
 
@@ -652,6 +652,15 @@ def _model_name(model):
     return f'Claude {m.group(1).capitalize()}' if m else (model or 'Claude')
 
 
+def gemini_backups(o):
+    out = []
+    for m in str(o['gemini_backup_model'] or '').replace(';', ',').split(','):
+        m = m.strip()
+        if m and m != o['gemini_model'] and m not in out:
+            out.append(m)
+    return out
+
+
 def scan_readers():
     """The readers to try, in order, as (label, function). auto: Claude, then Claude's stronger model as a
     second look, then Gemini, using every service that has a key."""
@@ -664,9 +673,9 @@ def scan_readers():
             readers.append((_model_name(o['claude_check_model']), lambda j: claude_scan(j, o['claude_check_model'])))
     if o['gemini_api_key'] and want in ('auto', 'gemini', 'race'):
         readers.append(('Gemini', lambda j: gemini_scan(j, o['gemini_model'])))
-        # A second Gemini model for when the first is busy ("high demand") or its read doesn't check out.
-        if o['gemini_backup_model'] and o['gemini_backup_model'] != o['gemini_model']:
-            readers.append(('Gemini backup', lambda j: gemini_scan(j, o['gemini_backup_model'])))
+        # More Gemini models (comma-separated) for when one is busy ("high demand") or its read doesn't check out.
+        for m in gemini_backups(o):
+            readers.append((f'Gemini backup {m}', lambda j, m=m: gemini_scan(j, m)))
     if not readers:
         readers.append(('Gemini', gemini_scan))   # reports the missing-key message
     return readers
@@ -680,8 +689,8 @@ def scan_providers():
         if label == 'Gemini':
             if o['gemini_api_key']:
                 out.append(f"Gemini ({o['gemini_model']})")
-        elif label == 'Gemini backup':
-            out.append(f"Gemini ({o['gemini_backup_model']})")
+        elif label.startswith('Gemini backup '):
+            out.append(f"Gemini ({label[len('Gemini backup '):]})")
         else:
             out.append(label)
     return out
@@ -718,6 +727,20 @@ def check_read(r):
     return probs
 
 
+def _join_errors(errors):
+    """One readable message: busy / out-of-quota Gemini models are grouped, other errors kept as they are."""
+    busy = [e[5:].replace('gemini-', '') for e in errors if e.startswith('BUSY:')]
+    quota = [e[6:].replace('gemini-', '') for e in errors if e.startswith('QUOTA:')]
+    rest = [e for e in dict.fromkeys(errors) if not e.startswith(('BUSY:', 'QUOTA:'))]
+    out = []
+    if busy:
+        out.append(f"Gemini is busy right now ({', '.join(busy)}: high demand). Scan again in a minute, or type the times in."
+                   + ('' if options()['anthropic_api_key'] else ' A Claude key (anthropic_api_key) would cover these times.'))
+    if quota:
+        out.append(f"Gemini free-tier limit reached ({', '.join(quota)}). Wait a minute and scan again.")
+    return ' '.join(out + rest)
+
+
 def scan_photo(jpeg):
     """Read the photo with the first reader; if its answer doesn't check out (or it fails), ask the next one.
     Returns the first read that checks out, else the best one found."""
@@ -729,14 +752,15 @@ def scan_photo(jpeg):
     def disp(label):   # "Gemini 3.5-flash-lite", "Gemini 3.6-flash", "Claude Haiku"
         if label == 'Gemini':
             return 'Gemini ' + o_['gemini_model'].replace('gemini-', '')
-        if label == 'Gemini backup':
-            return 'Gemini ' + o_['gemini_backup_model'].replace('gemini-', '')
+        if label.startswith('Gemini backup '):
+            return 'Gemini ' + label[len('Gemini backup '):].replace('gemini-', '')
         return label
     for label, fn in readers:
         code, res = fn(jpeg)
         if code != 200:
             errors.append(res.get('error', 'Scan failed.'))
-            steps.append(f'{disp(label)} failed' + (' (busy)' if 'high demand' in str(res.get('error', '')).lower() or '(503)' in str(res.get('error', '')) or '(429)' in str(res.get('error', '')) else ''))
+            err = str(res.get('error', ''))
+            steps.append(f'{disp(label)} ' + ('busy' if err.startswith('BUSY:') else 'out of quota' if err.startswith('QUOTA:') else 'failed'))
             continue
         probs = check_read(res)
         if not probs:
@@ -747,19 +771,19 @@ def scan_photo(jpeg):
         if best is None or len(probs) < len(check_read(best[1])):
             best = (label, res)
     if best is None:
-        return 502, {'error': ' '.join(dict.fromkeys(errors)) or 'Scan failed.'}
+        return 502, {'error': _join_errors(errors) or 'Scan failed.', 'scan_steps': steps}
     label, res = best
     if res.get('_model'):                       # name the model Anthropic says answered, not the setting
         label = _model_name(res['_model'])
     if label.startswith('Gemini'):
-        gm = o_['gemini_backup_model'] if label == 'Gemini backup' else o_['gemini_model']
+        gm = label[len('Gemini backup '):] if label.startswith('Gemini backup ') else o_['gemini_model']
         res['_model'] = res.get('_model') or gm
         label = f'Gemini {gm.replace("gemini-", "")}'
     res['scan_model'] = res.pop('_model', None) or ''
     res['scan_message_id'] = res.pop('_id', '')
     res['scan_tokens'] = res.pop('_tokens', '')
     ms = round((time.monotonic() - t0) * 1000)
-    res['scan_provider'] = label + ((' (backup)' if best[0] == 'Gemini backup' else ' (second look)') if best[0] != readers[0][0] else '')
+    res['scan_provider'] = label + ((' (backup)' if best[0].startswith('Gemini backup ') else ' (second look)') if best[0] != readers[0][0] else '')
     res['scan_ms'] = ms
     res['gemini_ms'] = ms          # older app builds read this name
     res['scan_raced'] = False
