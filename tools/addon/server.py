@@ -77,6 +77,7 @@ def options():
     return {
         'gemini_api_key': (o.get('gemini_api_key') or '').strip(),
         'gemini_model': (o.get('gemini_model') or 'gemini-3.5-flash-lite').strip(),
+        'gemini_backup_model': (o.get('gemini_backup_model') if o.get('gemini_backup_model') is not None else 'gemini-3.6-flash').strip(),
         'anthropic_api_key': (o.get('anthropic_api_key') or '').strip(),
         'claude_model': (o.get('claude_model') or 'claude-haiku-5-5').strip(),
         'scan_provider': (o.get('scan_provider') or 'auto').strip().lower(),
@@ -465,7 +466,8 @@ def _gemini_error(e, model):
         400: 'Gemini rejected the request. Check gemini_api_key in the add-on Configuration.' if 'key' in msg.lower() else f'Gemini error: {msg}',
         403: 'Gemini refused the key. Check it in the add-on Configuration.',
         404: f'Gemini has no model named "{model}" for your key. {gemini_models_hint()}Change gemini_model in the add-on Configuration.',
-        429: 'Gemini free-tier limit reached. Wait a minute and scan again.',
+        429: f'Gemini free-tier limit reached for {model}. Wait a minute and scan again.',
+        503: f'Gemini {model} is busy right now (high demand). Scan again, or set gemini_backup_model.',
     }.get(e.status, f'Gemini error ({e.status}). {msg}')
 
 
@@ -480,11 +482,11 @@ def _thinking_options(model):
     return [None]
 
 
-def gemini_scan(jpeg):
+def gemini_scan(jpeg, model=None):
     o = options()
     if not o['gemini_api_key']:
         return 400, {'error': 'Add gemini_api_key in the add-on Configuration tab to scan.'}
-    model = o['gemini_model']
+    model = model or o['gemini_model']
     url = f"{GEMINI_BASE}/{urllib.parse.quote(model)}:generateContent?key={urllib.parse.quote(o['gemini_api_key'])}"
     image = {'inline_data': {'mime_type': 'image/jpeg', 'data': base64.b64encode(jpeg).decode()}}
 
@@ -529,6 +531,9 @@ def gemini_scan(jpeg):
                     break
                 except HttpError as e:
                     if e.status in (400, 403, 404):   # a request that can never work: no point waiting for the others
+                        return 502, {'error': _gemini_error(e, model)}
+                    if e.status in (429, 503):        # model busy ("high demand") or its quota used up:
+                        log.info('Scan: %s busy (%d), moving on', model, e.status)   # let the backup model try now
                         return 502, {'error': _gemini_error(e, model)}
                     first_err = first_err or e
                 except Exception as e:
@@ -658,7 +663,10 @@ def scan_readers():
         if o['claude_check_model'] and o['claude_check_model'] != o['claude_model']:
             readers.append((_model_name(o['claude_check_model']), lambda j: claude_scan(j, o['claude_check_model'])))
     if o['gemini_api_key'] and want in ('auto', 'gemini', 'race'):
-        readers.append(('Gemini', gemini_scan))
+        readers.append(('Gemini', lambda j: gemini_scan(j, o['gemini_model'])))
+        # A second Gemini model for when the first is busy ("high demand") or its read doesn't check out.
+        if o['gemini_backup_model'] and o['gemini_backup_model'] != o['gemini_model']:
+            readers.append(('Gemini backup', lambda j: gemini_scan(j, o['gemini_backup_model'])))
     if not readers:
         readers.append(('Gemini', gemini_scan))   # reports the missing-key message
     return readers
@@ -672,6 +680,8 @@ def scan_providers():
         if label == 'Gemini':
             if o['gemini_api_key']:
                 out.append(f"Gemini ({o['gemini_model']})")
+        elif label == 'Gemini backup':
+            out.append(f"Gemini ({o['gemini_backup_model']})")
         else:
             out.append(label)
     return out
@@ -714,18 +724,26 @@ def scan_photo(jpeg):
     t0 = time.monotonic()
     best, errors, steps = None, [], []
     readers = scan_readers()
+    o_ = options()
+
+    def disp(label):   # "Gemini 3.5-flash-lite", "Gemini 3.6-flash", "Claude Haiku"
+        if label == 'Gemini':
+            return 'Gemini ' + o_['gemini_model'].replace('gemini-', '')
+        if label == 'Gemini backup':
+            return 'Gemini ' + o_['gemini_backup_model'].replace('gemini-', '')
+        return label
     for label, fn in readers:
         code, res = fn(jpeg)
         if code != 200:
             errors.append(res.get('error', 'Scan failed.'))
-            steps.append(f'{label} failed')
+            steps.append(f'{disp(label)} failed' + (' (busy)' if 'high demand' in str(res.get('error', '')).lower() or '(503)' in str(res.get('error', '')) or '(429)' in str(res.get('error', '')) else ''))
             continue
         probs = check_read(res)
         if not probs:
             best = (label, res)
             break
-        steps.append(f"{label}: {', '.join(probs)}")
-        log.info('Scan: %s read did not check out (%s), asking the next reader', label, ', '.join(probs))
+        steps.append(f"{disp(label)}: {', '.join(probs)}")
+        log.info('Scan: %s read did not check out (%s), asking the next reader', disp(label), ', '.join(probs))
         if best is None or len(probs) < len(check_read(best[1])):
             best = (label, res)
     if best is None:
@@ -733,11 +751,15 @@ def scan_photo(jpeg):
     label, res = best
     if res.get('_model'):                       # name the model Anthropic says answered, not the setting
         label = _model_name(res['_model'])
-    res['scan_model'] = res.pop('_model', None) or ('gemini' if label == 'Gemini' else '')
+    if label.startswith('Gemini'):
+        gm = o_['gemini_backup_model'] if label == 'Gemini backup' else o_['gemini_model']
+        res['_model'] = res.get('_model') or gm
+        label = f'Gemini {gm.replace("gemini-", "")}'
+    res['scan_model'] = res.pop('_model', None) or ''
     res['scan_message_id'] = res.pop('_id', '')
     res['scan_tokens'] = res.pop('_tokens', '')
     ms = round((time.monotonic() - t0) * 1000)
-    res['scan_provider'] = label + (' (second look)' if best[0] != readers[0][0] else '')
+    res['scan_provider'] = label + ((' (backup)' if best[0] == 'Gemini backup' else ' (second look)') if best[0] != readers[0][0] else '')
     res['scan_ms'] = ms
     res['gemini_ms'] = ms          # older app builds read this name
     res['scan_raced'] = False
