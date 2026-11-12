@@ -735,7 +735,7 @@ def _join_errors(errors):
     out = []
     if busy:
         out.append(f"Gemini is busy right now ({', '.join(busy)}: high demand). Scan again in a minute, or type the times in."
-                   + ('' if options()['anthropic_api_key'] else ' A Claude key (anthropic_api_key) would cover these times.'))
+                   )
     if quota:
         out.append(f"Gemini free-tier limit reached ({', '.join(quota)}). Wait a minute and scan again.")
     return ' '.join(out + rest)
@@ -770,6 +770,21 @@ def scan_photo(jpeg):
         log.info('Scan: %s read did not check out (%s), asking the next reader', disp(label), ', '.join(probs))
         if best is None or len(probs) < len(check_read(best[1])):
             best = (label, res)
+    if best is None and errors and all(e.startswith('BUSY:') for e in errors):
+        # Every model said "high demand". Busy spells are often short: wait a moment and go round once more.
+        log.info('Scan: every Gemini model busy, trying again in 3 s')
+        time.sleep(3)
+        errors = []
+        for label, fn in readers:
+            code, res = fn(jpeg)
+            if code == 200 and not check_read(res):
+                best = (label, res)
+                steps.append(f'{disp(label)} answered on the second round')
+                break
+            if code != 200:
+                errors.append(str(res.get('error', 'Scan failed.')))
+            elif best is None:
+                best = (label, res)
     if best is None:
         return 502, {'error': _join_errors(errors) or 'Scan failed.', 'scan_steps': steps}
     label, res = best
